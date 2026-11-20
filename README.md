@@ -119,6 +119,26 @@ None yet.
 
 The tests drive `bin/run-task` with `tests/fixtures/fake-opencode` (set through `OPENCODE_BIN`), so they never contact a model.
 
+### Counted runs, regrading and `RESULTS.md`
+
+```sh
+bin/run-batch TASK [--run-root DIR] [--records-dir DIR]
+              [--timeout SECONDS] [--max-rounds N] [--check-timeout SECONDS]
+bin/regrade RECORD_DIR [--check-timeout SECONDS]
+bin/results TASK [--records-dir DIR] [--output FILE]
+```
+
+`bin/run-batch` calls `bin/run-task` for the counted runs 1 to 5 of both setups, with the same flags for every run. The setup that goes first alternates (run 1: with, without; run 2: without, with; ...) so a slow or fast stretch of the night doesn't favour one setup. It skips a run whose record already exists, so running it again after an interruption resumes with the next unfinished run. A run whose `run-task` fails (no record) doesn't stop the batch; it is listed at the end, the exit code is 1, and the next batch call retries it. It never runs the practice run. Overnight, after the practice run:
+
+```sh
+export PATH="$PWD/bin:$PATH"
+bin/preflight && caffeinate -i bin/run-batch game-2048 2>&1 | tee -a /tmp/2048-batch.log
+```
+
+`bin/regrade runs/game-2048/with-skills/3` grades that run's saved `src/` again against the task's hidden tests in a temporary folder (the record is never changed), prints each file's status and the hidden-test score, and exits 0 if they match `result.json`, 1 if not. It checks the code only; a run that hit a limit failed even if its code passes.
+
+`bin/results game-2048` writes `RESULTS.md` from `runs/game-2048/*/*/result.json`: a row per counted run, a summary per setup (pass rate, medians of hidden tests, rounds and duration), the practice run listed apart, the method (model name from the records, lisp-skills commit from the submodule, limits from the records), threats to validity, how to regrade, and how to play the best passing run (fewest rounds, then shortest duration), or that no run passed. Rerun it after the batch; it overwrites `RESULTS.md`.
+
 ## Running at work (openSUSE + LiteLLM)
 
 Target: openSUSE Linux x86_64 with Allegro CL installed natively, Python 3, no Docker, Qwen3-8B FP8 behind LiteLLM. Only environment variables change; the code is the same as on the Mac.
