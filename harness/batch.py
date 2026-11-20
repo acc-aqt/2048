@@ -12,7 +12,7 @@ from pathlib import Path
 
 from harness.grade import DEFAULT_CHECK_TIMEOUT
 from harness.runner import (DEFAULT_MAX_ROUNDS, DEFAULT_RECORDS, DEFAULT_RUN_ROOT, DEFAULT_TIMEOUT,
-                            REPO, TASKS)
+                            REPO, TASKS, has_record)
 from harness.setups import SETUPS
 
 RUN_TASK = REPO / "bin" / "run-task"
@@ -51,7 +51,7 @@ def main(argv):
     failed = []
     for setup, number in schedule():
         label = f"{args.task} {setup} #{number}"
-        if (records / args.task / setup / str(number)).exists():
+        if has_record(records / args.task / setup / str(number)):
             print(f"run-batch: skip {label}: record exists", flush=True)
             continue
         print(f"run-batch: start {label}", flush=True)

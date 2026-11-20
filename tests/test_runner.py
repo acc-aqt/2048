@@ -42,11 +42,11 @@ class RunnerTestCase(unittest.TestCase):
     def use_fake_docker_printing_ok(self):
         self.env.update(LISP_CHECK_DOCKER=str(FAKE_DOCKER), FAKE_DOCKER_STDOUT="OK\n")
 
-    def run_task(self, *args, setup="without-skills", run_number="1", task="dummy-slide-row"):
+    def run_task(self, *args, setup="without-skills", run_number="1", task="dummy-slide-row", timeout=600):
         return subprocess.run(
             [str(RUN_TASK), task, setup, run_number,
              "--run-root", str(self.run_root), "--records-dir", str(self.records), *args],
-            env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600,
+            env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
         )
 
     def record_dir(self, setup="without-skills", run_number="1"):
@@ -212,6 +212,33 @@ class RecordTest(RunnerTestCase):
         self.run_task()
 
         self.assertEqual(self.result()["check_fix_rounds"], 3)
+
+    def test_symlinks_and_special_files_in_the_model_folder_are_skipped_and_listed(self):
+        self.env["FAKE_OPENCODE_SPECIAL_FILES"] = "1"
+
+        completed = self.run_task(timeout=120)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = self.result()
+        self.assertEqual(result["skipped_files"], {"dangling.lisp": "symlink", "pipe": "special file"})
+        sources = sorted(p.name for p in (self.record_dir() / "src").iterdir())
+        self.assertEqual(sources, sorted(p.name for p in WRONG.iterdir()))
+
+    def test_a_record_folder_without_result_json_counts_as_missing(self):
+        leftover = self.record_dir()
+        leftover.mkdir(parents=True)
+        (leftover / "transcript.jsonl").write_text("half a record\n")
+
+        completed = self.run_task()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.result()["run_number"], 1)
+        self.assertNotIn("half a record", (self.record_dir() / "transcript.jsonl").read_text())
+
+    def test_no_partial_record_folders_are_left_next_to_the_record(self):
+        self.run_task()
+
+        self.assertEqual([p.name for p in self.record_dir().parent.iterdir()], ["1"])
 
     def test_refuses_to_overwrite_an_existing_record(self):
         self.run_task()

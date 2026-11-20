@@ -75,10 +75,16 @@ class BatchTest(unittest.TestCase):
             self.assertEqual(json.loads(result_file.read_text())["limits"],
                              {"max_rounds": 7, "timeout_seconds": 300, "check_timeout_seconds": 30})
 
+    def make_record(self, setup, number, result_json=True):
+        record = self.records / TASK / setup / str(number)
+        record.mkdir(parents=True)
+        if result_json:
+            (record / "result.json").write_text("{}\n")
+
     def test_resumes_by_skipping_runs_that_already_have_a_record(self):
         for setup in ("with-skills", "without-skills"):
-            (self.records / TASK / setup / "1").mkdir(parents=True)
-        (self.records / TASK / "without-skills" / "2").mkdir(parents=True)
+            self.make_record(setup, 1)
+        self.make_record("without-skills", 2)
 
         completed = self.run_batch()
 
@@ -88,6 +94,15 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(started[0], ("with-skills", 2))
         self.assertNotIn(("without-skills", 2), started)
         self.assertIn("skip", completed.stdout)
+
+    def test_reruns_a_record_folder_without_result_json(self):
+        self.make_record("with-skills", 1, result_json=False)
+
+        completed = self.run_batch()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.runs_started()[0], ("with-skills", 1))
+        self.assertTrue((self.records / TASK / "with-skills" / "1" / "result.json").is_file())
 
     def test_keeps_going_after_a_failed_run_and_reports_it(self):
         self.env["OPENCODE_BIN"] = str(Path(self.tmp.name) / "no-such-opencode")

@@ -8,6 +8,7 @@ FAKE_OPENCODE_SCENARIO changes that:
   endless-checks  run `lisp-check package.lisp` forever
   never-done      write nothing, check nothing, stop
   stop-early      like never-done, but behave normally when continued with `-s`
+FAKE_OPENCODE_SPECIAL_FILES=1 also leaves a dangling symlink `dangling.lisp` and a FIFO `pipe`.
 `export ID`: prints a small session JSON.
 """
 
@@ -76,6 +77,9 @@ def run(args):
     if solution:
         for source in sorted(Path(solution).iterdir()):
             shutil.copy2(source, source.name)
+    if os.environ.get("FAKE_OPENCODE_SPECIAL_FILES") and not Path("pipe").exists():
+        os.symlink("no-such-target.lisp", "dangling.lisp")
+        os.mkfifo("pipe")
     for path in sorted(Path.cwd().glob("*.lisp")):
         args = ["lisp-check"] + (["--test"] if path.name.endswith("tests.lisp") else []) + [path.name]
         result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)

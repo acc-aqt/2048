@@ -3,6 +3,7 @@
 import os
 import re
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -56,9 +57,43 @@ def lisp_check(relative, cwd, test, check_timeout):
     return result, f"$ lisp-check {' '.join(args)}\n{result.stdout}{result.stderr}"
 
 
+def copy_model_files(source, target):
+    """Copy the folders and regular files of SOURCE to a new TARGET, leaving out .git.
+
+    Symlinks and special files (FIFOs, sockets, devices) are skipped, never followed or opened, so a
+    dangling link can't fail the copy, a FIFO can't block it and a link can't pull in files from outside.
+    Returns the skipped paths: {relative path: "symlink" or "special file"}.
+    """
+    source, target = Path(source), Path(target)
+    target.mkdir(parents=True)
+    skipped = {}
+    for dirpath, dirnames, filenames in os.walk(source):
+        folder = Path(dirpath)
+        relative = folder.relative_to(source)
+        for name in sorted(dirnames):
+            dirnames.remove(name)
+            if name == ".git":
+                continue
+            if (folder / name).is_symlink():
+                skipped[str(relative / name)] = "symlink"
+                continue
+            (target / relative / name).mkdir()
+            dirnames.append(name)
+        for name in filenames:
+            mode = os.lstat(folder / name).st_mode
+            if stat.S_ISLNK(mode):
+                skipped[str(relative / name)] = "symlink"
+            elif not stat.S_ISREG(mode):
+                skipped[str(relative / name)] = "special file"
+            else:
+                shutil.copy2(folder / name, target / relative / name)
+    return dict(sorted(skipped.items()))
+
+
 def copy_project(project_dir, grading_dir):
-    shutil.copytree(project_dir, grading_dir, ignore=shutil.ignore_patterns(".git"))
+    skipped = copy_model_files(project_dir, grading_dir)
     (grading_dir / ".git").mkdir(exist_ok=True)
+    return skipped
 
 
 def unused_folder(parent, name):
@@ -109,7 +144,7 @@ def all_files_ok(project_dir, check_dir, required_files=(), check_timeout=DEFAUL
 def grade(project_dir, hidden_tests_dir, grading_dir, required_files=(), check_timeout=DEFAULT_CHECK_TIMEOUT):
     """Grade PROJECT_DIR in a fresh GRADING_DIR; PROJECT_DIR itself is never changed."""
     project_dir, hidden_tests_dir, grading_dir = map(Path, (project_dir, hidden_tests_dir, grading_dir))
-    copy_project(project_dir, grading_dir)
+    skipped_files = copy_project(project_dir, grading_dir)
     source_files, log = check_project_files(grading_dir, required_files, check_timeout)
     hidden_files = copy_hidden_tests(hidden_tests_dir, grading_dir)
 
@@ -123,6 +158,7 @@ def grade(project_dir, hidden_tests_dir, grading_dir, required_files=(), check_t
 
     return {
         "source_files": source_files,
+        "skipped_files": skipped_files,
         "hidden_tests_passed": passed,
         "hidden_tests_total": total,
         "passed": bool(source_files) and set(source_files.values()) == {"OK"}

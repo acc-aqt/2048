@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness.grade import DEFAULT_CHECK_TIMEOUT, all_files_ok, grade, is_test_file
+from harness.grade import DEFAULT_CHECK_TIMEOUT, all_files_ok, copy_model_files, grade, is_test_file
 from harness.opencode import isolated_env, write_run_config
 from harness.preflight import DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL
 from harness.setups import SETUPS
@@ -185,14 +185,28 @@ def count_rounds(log):
     return len(log.read_text().splitlines()) if log.exists() else 0
 
 
+def has_record(record_dir):
+    """A record counts only once its result.json exists; a folder without one is a leftover."""
+    return (record_dir / "result.json").is_file()
+
+
 def save_records(record_dir, run_folder, work, grading, result):
-    record_dir.mkdir(parents=True)
+    """Build the record in a hidden sibling folder, then rename it to RECORD_DIR, so a record is complete or absent.
+
+    A leftover RECORD_DIR without result.json is renamed to <run>.incomplete-<UTC time> first.
+    """
+    record_dir.parent.mkdir(parents=True, exist_ok=True)
+    partial = record_dir.parent / f".{record_dir.name}.partial-{os.getpid()}"
+    partial.mkdir()
     for name in ("transcript.jsonl", "opencode.stderr.log", "session.json", "lisp-check.log"):
         if (run_folder / name).exists():
-            shutil.copy2(run_folder / name, record_dir / name)
-    (record_dir / "grading.log").write_text(grading["log"])
-    shutil.copytree(work, record_dir / "src", ignore=shutil.ignore_patterns(".git"))
-    (record_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+            shutil.copy2(run_folder / name, partial / name)
+    (partial / "grading.log").write_text(grading["log"])
+    copy_model_files(work, partial / "src")
+    (partial / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+    if record_dir.exists():
+        record_dir.rename(record_dir.parent / f"{record_dir.name}.incomplete-{utc_now():%Y%m%dT%H%M%SZ}")
+    partial.rename(record_dir)
 
 
 def main(argv):
@@ -200,7 +214,7 @@ def main(argv):
     task_dir = TASKS / args.task
     setup = SETUPS[args.setup]
     record_dir = args.records_dir / args.task / args.setup / str(args.run_number)
-    if record_dir.exists():
+    if has_record(record_dir):
         print(f"run-task: record {record_dir} already exists; not overwriting it", file=sys.stderr)
         return 1
 
@@ -253,6 +267,7 @@ def main(argv):
         "hidden_tests_passed": grading["hidden_tests_passed"],
         "hidden_tests_total": grading["hidden_tests_total"],
         "source_files": grading["source_files"],
+        "skipped_files": grading["skipped_files"],
         "passed": grading["passed"] and not limit_hit,
         "session_id": sid,
         "run_folder": str(run_folder),
