@@ -94,7 +94,7 @@ Nothing else differs. The shared prompt is identical for both: work alone, creat
 
 Reaching the round limit fails the run even if the model stopped on its own at that round. The runner polls the round log every 0.2 s, so `check_fix_rounds` can end slightly above the limit.
 
-If the first turn ends without hitting a limit, the runner checks every required and every present `.lisp` file in a copy of `work/` (own log, not counted as rounds). If any is missing or not OK, it sends the one fixed message "Continue until every file is created and every .lisp file prints OK in lisp-check." with `opencode run -s <session>`. It never sends a second one.
+If the first turn ends without hitting a limit, the runner checks that every required file (`.asd` included) exists and every present `.lisp` file prints OK, in a copy of `work/` (own log, not counted as rounds). If any is missing or not OK, it sends the one fixed message "Continue until every file is created and every .lisp file prints OK in lisp-check." with `opencode run -s <session>`. It never sends a second one.
 
 ### Practice run
 
@@ -117,7 +117,7 @@ None yet.
 3. Exports the session with `opencode export`, then grades: every required and every present `.lisp` file in `work/` through `lisp-check` (`--test` for `*tests.lisp`) and the hidden tests with `lisp-check --test`, all in a copy of `work/`. These grading checks don't count as rounds.
 4. Writes `runs/<task>/<setup>/<run>/`: `result.json`, `transcript.jsonl` (the JSON event stream), `session.json` (the export), `opencode.stderr.log`, `lisp-check.log` (one line per round), `grading.log` and `src/` (the model's final files). It refuses to overwrite an existing record.
 
-`result.json` holds task, setup, run number, `counted`, model, start time, duration, `limits`, `limit_hit` (`null`, `"rounds"` or `"wall_clock"`), the last turn's OpenCode exit code, `continue_sent`, `check_fix_rounds`, `hidden_tests_passed`/`hidden_tests_total`, per-file status in `source_files` (`OK`, `FAIL`, `TIMEOUT` or `MISSING`) and `passed` (every file OK, every hidden assertion passed, no limit hit).
+`result.json` holds task, setup, run number, `counted`, model, start time, duration, `limits`, `limit_hit` (`null`, `"rounds"` or `"wall_clock"`), the last turn's OpenCode exit code, `continue_sent`, `check_fix_rounds`, `hidden_tests_passed`/`hidden_tests_total`, per-file status in `source_files` (`OK`, `FAIL`, `TIMEOUT` for each `.lisp` file, `MISSING` for any absent required file, `.asd` included) and `passed` (every file OK, every hidden assertion passed, no limit hit).
 
 The tests drive `bin/run-task` with `tests/fixtures/fake-opencode` (set through `OPENCODE_BIN`), so they never contact a model.
 

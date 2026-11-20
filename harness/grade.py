@@ -74,21 +74,21 @@ def copy_hidden_tests(hidden_tests_dir, grading_dir):
 
 
 def check_project_files(grading_dir, required_files=(), check_timeout=DEFAULT_CHECK_TIMEOUT):
-    """lisp-check every .lisp file in GRADING_DIR: OK, FAIL, TIMEOUT, or MISSING for an absent required file."""
+    """lisp-check every .lisp file in GRADING_DIR: OK, FAIL, TIMEOUT, or MISSING for any absent required file."""
     present = {str(p.relative_to(grading_dir)) for p in grading_dir.rglob("*.lisp")}
     statuses, log = {}, []
-    for name in sorted(present | {name for name in required_files if name.endswith(".lisp")}):
-        if name not in present:
+    for name in required_files:
+        if not (grading_dir / name).is_file():
             statuses[name] = "MISSING"
-            continue
+    for name in sorted(present):
         result, entry = lisp_check(Path(name), grading_dir, is_test_file(Path(name)), check_timeout)
         statuses[name] = status(result)
         log.append(entry)
-    return statuses, log
+    return dict(sorted(statuses.items())), log
 
 
 def all_files_ok(project_dir, check_dir, required_files=(), check_timeout=DEFAULT_CHECK_TIMEOUT):
-    """True if every required and every present .lisp file in PROJECT_DIR prints OK, checked in a copy."""
+    """True if every required file in PROJECT_DIR exists and every .lisp file prints OK, checked in a copy."""
     copy_project(Path(project_dir), Path(check_dir))
     statuses, _ = check_project_files(Path(check_dir), required_files, check_timeout)
     return bool(statuses) and set(statuses.values()) == {"OK"}

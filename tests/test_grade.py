@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from harness.grade import grade
+from harness.grade import all_files_ok, grade
 
 REPO = Path(__file__).resolve().parent.parent
 FAKE_DOCKER = REPO / "tests" / "fixtures" / "fake-docker"
@@ -70,6 +70,16 @@ class GradeWithFakeDockerTest(unittest.TestCase):
         self.assertEqual(result["source_files"]["package.lisp"], "OK")
         self.assertNotIn("slide-row.asd", result["source_files"])
         self.assertFalse(result["passed"])
+
+    def test_a_missing_required_system_definition_is_missing(self):
+        (self.project / "slide-row.asd").unlink()
+        required = ["slide-row.asd", "slide-row.lisp", "package.lisp"]
+
+        result = grade(self.project, HIDDEN, self.root / "grading", required_files=required)
+
+        self.assertEqual(result["source_files"]["slide-row.asd"], "MISSING")
+        self.assertFalse(result["passed"])
+        self.assertFalse(all_files_ok(self.project, self.root / "status-check", required))
 
 
 if __name__ == "__main__":
