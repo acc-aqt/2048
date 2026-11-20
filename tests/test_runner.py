@@ -189,6 +189,13 @@ class RecordTest(RunnerTestCase):
             self.assertIn(key, result)
         self.assertEqual(result["session_id"], "ses_fake0001")
 
+    def test_run_zero_is_the_uncounted_practice_run(self):
+        self.run_task(run_number="0")
+        self.run_task(run_number="1")
+
+        self.assertFalse(self.result(run_number="0")["counted"])
+        self.assertTrue(self.result(run_number="1")["counted"])
+
     def test_saves_transcript_session_round_log_and_final_sources(self):
         self.run_task()
 

@@ -24,6 +24,7 @@ DEFAULT_RUN_ROOT = "/tmp/2048-runs"
 DEFAULT_RECORDS = REPO / "runs"
 DEFAULT_TIMEOUT = 7200
 DEFAULT_MAX_ROUNDS = 40
+PRACTICE_RUN = 0
 POLL_SECONDS = 0.2
 KILL_GRACE_SECONDS = 10
 EXPORT_TIMEOUT = 120
@@ -62,7 +63,7 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(prog="run-task", description=__doc__)
     parser.add_argument("task", help="folder name under tasks/")
     parser.add_argument("setup", choices=sorted(SETUPS))
-    parser.add_argument("run_number", type=int)
+    parser.add_argument("run_number", type=int, help=f"{PRACTICE_RUN} is the uncounted practice run")
     parser.add_argument("--run-root", default=os.environ.get("RUN_ROOT", DEFAULT_RUN_ROOT),
                         help=f"where run folders are created (default $RUN_ROOT or {DEFAULT_RUN_ROOT})")
     parser.add_argument("--records-dir", default=str(DEFAULT_RECORDS),
@@ -239,6 +240,7 @@ def main(argv):
         "task": args.task,
         "setup": args.setup,
         "run_number": args.run_number,
+        "counted": args.run_number != PRACTICE_RUN,
         "model": env["LLM_MODEL"],
         "started_at": started.isoformat(timespec="seconds"),
         "duration_seconds": round(duration, 1),
