@@ -88,7 +88,7 @@ Nothing else differs. The shared prompt is identical for both: work alone, creat
 |---|---|---|---|
 | check-fix rounds (lines in the round log) | 40 | `--max-rounds` | process group killed, run failed, `limit_hit: "rounds"` |
 | wall clock, both turns together | 7200 s | `--timeout` | process group killed, run failed, `limit_hit: "wall_clock"` |
-| one grading `lisp-check` | 600 s | `--check-timeout` | that file `TIMEOUT` (a hidden test file counts 0 passed), run failed |
+| one grading `lisp-check` | 120 s | `--check-timeout` | that file `TIMEOUT` (a hidden test file counts 0 passed), run failed |
 
 Reaching the round limit fails the run even if the model stopped on its own at that round. The runner polls the round log every 0.2 s, so `check_fix_rounds` can end slightly above the limit.
 

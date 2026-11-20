@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 LISP_CHECK = Path(__file__).resolve().parent.parent / "bin" / "lisp-check"
-DEFAULT_CHECK_TIMEOUT = 600
+DEFAULT_CHECK_TIMEOUT = 120
 TIMED_OUT = re.compile(r"^lisp-check: timed out after ", re.MULTILINE)
 
 ASSERTION = re.compile(r"^\((?:util\.test:)?test(?:-[a-z-]+)?[\s)]", re.MULTILINE)

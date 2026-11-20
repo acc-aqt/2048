@@ -303,7 +303,7 @@ class LimitTest(RunnerTestCase):
         self.assertFalse(result["passed"])
         self.assertFalse(result["continue_sent"])
         self.assertEqual(result["limits"],
-                         {"max_rounds": 40, "timeout_seconds": 7200, "check_timeout_seconds": 600})
+                         {"max_rounds": 40, "timeout_seconds": 7200, "check_timeout_seconds": 120})
 
     def test_round_limit_can_be_set(self):
         self.env["FAKE_OPENCODE_SCENARIO"] = "endless-checks"
