@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.support import docker_image_available
+
 REPO = Path(__file__).resolve().parent.parent
 LISP_CHECK = REPO / "bin" / "lisp-check"
 FAKE_DOCKER = REPO / "tests" / "fixtures" / "fake-docker"
@@ -108,17 +110,6 @@ class FakeDockerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout.splitlines()[-1], "FAIL")
         self.assertTrue(result.stdout.startswith("lisp-check: "))
-
-
-def docker_image_available():
-    image = os.environ.get("LISP_CHECK_IMAGE", "lisp-skills-allegro:latest")
-    try:
-        result = subprocess.run(
-            ["docker", "image", "inspect", image], capture_output=True
-        )
-    except OSError:
-        return False
-    return result.returncode == 0
 
 
 @unittest.skipUnless(docker_image_available(), "lisp-skills-allegro image not available")
