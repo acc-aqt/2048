@@ -139,7 +139,7 @@ bin/preflight && caffeinate -i bin/run-batch game-2048 2>&1 | tee -a /tmp/2048-b
 
 `bin/regrade runs/game-2048/with-skills/3` grades that run's saved `src/` again against the task's hidden tests in a temporary folder (the record is never changed), prints each file's status and the hidden-test score, and exits 0 if they match `result.json`, 1 if not. It checks the code only; a run that hit a limit failed even if its code passes.
 
-`bin/results game-2048` writes `RESULTS.md` from `runs/game-2048/*/*/result.json`: a row per counted run, a summary per setup (pass rate, medians of hidden tests, rounds and duration), the practice run listed apart, the method (model name from the records, lisp-skills commit from the submodule, limits from the records), threats to validity, how to regrade, and how to play the best passing run (fewest rounds, then shortest duration), or that no run passed. Rerun it after the batch; it overwrites `RESULTS.md`.
+`bin/results game-2048` writes `RESULTS.md` from `<records dir>/game-2048/*/*/result.json` (default `runs/`; record paths in `RESULTS.md` are relative to its folder when the records are inside it, else absolute): a row per counted run, a summary per setup (pass rate, medians of hidden tests, rounds and duration), the practice run listed apart, the method (model name from the records, lisp-skills commit from the submodule, limits from the records), threats to validity, how to regrade, and, for a task whose spec defines `play`, how to play the best passing run (fewest rounds, then shortest duration) from a temporary copy of its `src/`, or that no run passed. Rerun it after the batch; it overwrites `RESULTS.md`.
 
 ## Running at work (openSUSE + LiteLLM)
 

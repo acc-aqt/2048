@@ -31,6 +31,7 @@ class ResultsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name).resolve()
+        self.root = root
         self.records = root / "runs"
         self.output = root / "RESULTS.md"
 
@@ -38,11 +39,11 @@ class ResultsTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def add_record(self, setup, number, passed=False, hidden=(30, 66), rounds=12, duration=1800.0,
-                   limit_hit=None, continue_sent=False, model="qwen3-8b-32k"):
-        record = self.records / "game-2048" / setup / str(number)
+                   limit_hit=None, continue_sent=False, model="qwen3-8b-32k", task="game-2048"):
+        record = self.records / task / setup / str(number)
         (record / "src").mkdir(parents=True)
         (record / "result.json").write_text(json.dumps({
-            "task": "game-2048", "setup": setup, "run_number": number, "counted": number != 0,
+            "task": task, "setup": setup, "run_number": number, "counted": number != 0,
             "model": model, "started_at": "2026-11-21T01:00:00+00:00",
             "duration_seconds": duration,
             "limits": {"max_rounds": 40, "timeout_seconds": 7200, "check_timeout_seconds": 120},
@@ -68,9 +69,9 @@ class ResultsTest(unittest.TestCase):
                     self.add_record(setup, number, rounds=40 if number == 5 else 20,
                                     limit_hit="rounds" if number == 5 else None)
 
-    def results(self):
+    def results(self, task="game-2048"):
         completed = subprocess.run(
-            [str(RESULTS), "game-2048", "--records-dir", str(self.records), "--output", str(self.output)],
+            [str(RESULTS), task, "--records-dir", str(self.records), "--output", str(self.output)],
             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -144,6 +145,26 @@ class ResultsTest(unittest.TestCase):
 
         self.assertIn("bin/regrade runs/game-2048/with-skills/1", regrade)
 
+    def test_record_paths_follow_the_records_dir(self):
+        self.records = self.root / "night-2"
+        self.add_record("with-skills", 1, passed=True, hidden=(66, 66))
+
+        output = self.results()
+
+        self.assertIn("bin/regrade night-2/game-2048/with-skills/1", output)
+        self.assertIn("night-2/game-2048/with-skills/1/src", section(output, "Play the best game"))
+        self.assertNotIn("runs/", output)
+
+    def test_record_paths_outside_the_output_folder_are_absolute(self):
+        self.records = self.root / "elsewhere" / "records"
+        self.output = self.root / "report" / "RESULTS.md"
+        self.output.parent.mkdir()
+        self.add_record("with-skills", 1)
+
+        output = self.results()
+
+        self.assertIn(f"bin/regrade {self.records}/game-2048/with-skills/1", output)
+
     def test_states_plainly_when_no_run_passed(self):
         self.add_full_batch()
 
@@ -161,6 +182,23 @@ class ResultsTest(unittest.TestCase):
         self.assertNotIn("without-skills/3", play)
         self.assertIn("(game-2048:play)", play)
         self.assertIn("lisp-skills-allegro", play)
+
+    def test_play_instructions_work_on_a_temporary_copy_of_src(self):
+        self.add_record("with-skills", 1, passed=True, hidden=(66, 66))
+
+        play = section(self.results(), "Play the best game")
+
+        self.assertIn('cp -R runs/game-2048/with-skills/1/src/. "$play_dir"', play)
+        self.assertIn('cd "$play_dir"', play)
+        self.assertNotIn("cd runs/", play)
+
+    def test_no_play_section_for_a_task_without_play(self):
+        self.add_record("with-skills", 1, passed=True, hidden=(11, 11), task="dummy-slide-row")
+
+        output = self.results(task="dummy-slide-row")
+
+        self.assertNotIn("## Play the best game", output)
+        self.assertNotIn(":play)", output)
 
     def test_counted_runs_are_sorted_by_run_then_setup(self):
         self.add_record("without-skills", 2)

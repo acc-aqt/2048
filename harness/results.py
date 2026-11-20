@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import statistics
 import subprocess
 from pathlib import Path
@@ -48,8 +49,21 @@ def lisp_skills_commit():
     return completed.stdout.strip() if completed.returncode == 0 else "unknown"
 
 
-def record_path(record):
-    return f"runs/{record['task']}/{record['setup']}/{record['run_number']}"
+PLAY_FUNCTION = re.compile(r"^#+ `\(play[ )]", re.MULTILINE)
+
+
+def records_location(records_dir, output):
+    """RECORDS_DIR as written in RESULTS.md: relative to the output file's folder if inside it, else absolute."""
+    records_dir, base = Path(records_dir).resolve(), Path(output).resolve().parent
+    return str(records_dir.relative_to(base)) if records_dir.is_relative_to(base) else str(records_dir)
+
+
+def record_path(records, record):
+    return f"{records}/{record['task']}/{record['setup']}/{record['run_number']}"
+
+
+def defines_play(task):
+    return bool(PLAY_FUNCTION.search((TASKS / task / "spec.md").read_text()))
 
 
 def minutes(seconds):
@@ -94,7 +108,7 @@ def limits_text(records):
         for limits in map(json.loads, distinct)) or "unknown"
 
 
-def method(task, records, commit):
+def method(task, records, commit, location):
     return f"""\
 - **Model:** {joined(r['model'] for r in records)}, driven by OpenCode with thinking mode on and a 32k context.
 - **Task:** `tasks/{task}/spec.md`, the same text for every run.
@@ -103,34 +117,41 @@ def method(task, records, commit):
 - **Human input:** one fixed prompt, and at most once the fixed message "{CONTINUE_MESSAGE}" if the model stopped before every file printed OK. Nobody edited the model's code.
 - **Limits:** {limits_text(records)}. Hitting a limit fails the run.
 - **Pass:** every `.lisp` file prints OK in `lisp-check` and all hidden tests ({joined(r['hidden_tests_total'] for r in records)} assertions) pass through `lisp-check --test`. The model never saw the hidden tests.
-- **Records:** `runs/{task}/<setup>/<run>/` holds `result.json`, the transcript, the exported session, the round log, the grading log and `src/`, the model's final files.
+- **Records:** `{location}/{task}/<setup>/<run>/` holds `result.json`, the transcript, the exported session, the round log, the grading log and `src/`, the model's final files.
 """
 
 
-def play_section(task, counted):
+def play_section(task, counted, location):
     passing = [r for r in counted if r["passed"]]
     if not passing:
         return "No counted run passed, so there is no game to play.\n"
     best = min(passing, key=lambda r: (r["check_fix_rounds"], r["duration_seconds"]))
+    src = f"{record_path(location, best)}/src"
     system = next((Path(name).stem for name in task_files((TASKS / task / "spec.md").read_text())
                    if name.endswith(".asd")), task)
     forms = (f"-e '(require :asdf)' -e '(asdf:load-asd (truename \"{system}.asd\"))' "
              f"-e '(asdf:load-system \"{system}\")' -e '({system}:play)' -kill")
     return f"""\
-The best passing run is **{best['setup']} #{best['run_number']}** ({best['check_fix_rounds']} check-fix rounds, {minutes(best['duration_seconds'])}); passing runs are ranked by fewest rounds, then shortest duration. Its code is in `{record_path(best)}/src`.
+The best passing run is **{best['setup']} #{best['run_number']}** ({best['check_fix_rounds']} check-fix rounds, {minutes(best['duration_seconds'])}); passing runs are ranked by fewest rounds, then shortest duration. Its code is in `{src}`.
 
-On a Mac, with the `lisp-skills-allegro` Docker image:
+Copy `src/` to a temporary folder first, so the compiled files Allegro writes don't end up in the record:
 
 ```sh
-cd {record_path(best)}/src
+play_dir=$(mktemp -d)
+cp -R {src}/. "$play_dir"
+cd "$play_dir"
+```
+
+Then, on a Mac, with the `lisp-skills-allegro` Docker image:
+
+```sh
 docker run --rm -it --platform linux/amd64 -v "$PWD:$PWD" -w "$PWD" lisp-skills-allegro:latest \\
   alisp -qq {forms}
 ```
 
-With Allegro CL installed natively:
+Or with Allegro CL installed natively:
 
 ```sh
-cd {record_path(best)}/src
 alisp -qq {forms}
 ```
 
@@ -138,17 +159,18 @@ Allegro prints its compile messages first, then the board. Type `w`, `a`, `s` or
 """
 
 
-def render(task, records, commit):
+def render(task, records, commit, location):
     counted = [r for r in records if r["counted"]]
     practice = [r for r in records if not r["counted"]]
     expected = len(SETUPS) * len(COUNTED_RUNS)
     summaries = [summary_row(setup, [r for r in counted if r["setup"] == setup]) for setup in sorted(SETUPS)]
     practice_text = table(RUN_COLUMNS, map(run_row, practice)) if practice else "No practice run recorded."
-    example = record_path(counted[0]) if counted else f"runs/{task}/with-skills/1"
+    example = record_path(location, counted[0]) if counted else f"{location}/{task}/with-skills/1"
+    play = f"\n## Play the best game\n\n{play_section(task, counted, location)}" if defines_play(task) else ""
     return f"""\
 # Results: {task}
 
-Generated by `bin/results {task}` from the result records in `runs/{task}/`. {len(counted)} of {expected} counted runs have a record.
+Generated by `bin/results {task}` from the result records in `{location}/{task}/`. {len(counted)} of {expected} counted runs have a record.
 
 ## Summary per setup
 
@@ -166,7 +188,7 @@ Medians are over the counted runs of each setup. Durations are the time spent in
 
 ## Method
 
-{method(task, records, commit)}
+{method(task, records, commit, location)}
 ## Threats to validity
 
 {THREATS}
@@ -180,15 +202,13 @@ bin/regrade {example}
 ```
 
 Any record folder works. Set `LISP_CHECK_MODE=native` to use an installed Allegro CL instead of Docker.
-
-## Play the best game
-
-{play_section(task, counted)}"""
+{play}"""
 
 
 def main(argv):
     args = parse_args(argv)
     records = load_records(args.records_dir, args.task)
-    Path(args.output).write_text(render(args.task, records, lisp_skills_commit()))
+    location = records_location(args.records_dir, args.output)
+    Path(args.output).write_text(render(args.task, records, lisp_skills_commit(), location))
     print(f"results: wrote {args.output} from {len(records)} records")
     return 0
