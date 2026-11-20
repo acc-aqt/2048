@@ -43,7 +43,25 @@ def timeout_setting():
     return os.environ.get("LISP_CHECK_TIMEOUT") or None
 
 
+FORWARDED_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+
+
+class Terminated(Exception):
+    """The wrapper got one of FORWARDED_SIGNALS, for example when the runner kills OpenCode's group."""
+
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def raise_terminated(signum, frame):
+    raise Terminated(signum)
+
+
 def kill_group(process):
+    """Kill PROCESS's whole group; from here on the wrapper only cleans up, so it ignores further signals."""
+    for sig in FORWARDED_SIGNALS:
+        signal.signal(sig, signal.SIG_IGN)
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -60,7 +78,7 @@ def run_limited(command):
     )
     try:
         stdout, stderr = process.communicate(timeout=float(timeout) if timeout else None)
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, Terminated):
         kill_group(process)
         raise
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
@@ -89,6 +107,9 @@ def run_docker(args):
     except subprocess.TimeoutExpired:
         kill_container(name)
         return timed_out()
+    except Terminated:
+        kill_container(name)
+        raise
     if result.returncode not in UPSTREAM_EXIT_CODES:
         details = " ".join(result.stderr.split()) or "no error output"
         return tool_error(f"docker failed with exit {result.returncode}: {details}")
@@ -127,6 +148,13 @@ def run(args):
 
 
 def main(args):
-    exit_code = run(args)
+    previous = {sig: signal.signal(sig, raise_terminated) for sig in FORWARDED_SIGNALS}
+    try:
+        exit_code = run(args)
+    except Terminated as terminated:
+        return 128 + terminated.signum
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
     log_invocation(args, exit_code)
     return exit_code

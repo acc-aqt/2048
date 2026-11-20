@@ -18,6 +18,39 @@ FAKE_DOCKER = REPO / "tests" / "fixtures" / "fake-docker"
 FAKE_ALISP = REPO / "tests" / "fixtures" / "fake-alisp"
 
 
+def wait_for(condition, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def process_gone(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def terminate_like_the_runner(command, cwd, env, started, sig=signal.SIGTERM):
+    """Start the wrapper in its own process group, wait for STARTED(), then signal that group."""
+    wrapper = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               start_new_session=True)
+    try:
+        if not wait_for(started, 60):
+            raise AssertionError("the check never started")
+        os.killpg(wrapper.pid, sig)
+        return wrapper.wait(timeout=60)
+    finally:
+        if wrapper.poll() is None:
+            wrapper.kill()
+            wrapper.wait()
+
+
 class FakeDockerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -89,6 +122,21 @@ class FakeDockerTest(unittest.TestCase):
         name = args[args.index("--name") + 1]
         (kill,) = [json.loads(line) for line in kills.read_text().splitlines()]
         self.assertEqual(kill, ["kill", name])
+
+    def test_killed_wrapper_kills_its_docker_client_and_container(self):
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            with self.subTest(sig=sig):
+                kills, pid_file = self.run_dir / f"kills-{sig}.jsonl", self.run_dir / f"pid-{sig}"
+                env = dict(self.env, FAKE_DOCKER_SLEEP="60", FAKE_DOCKER_KILLS=str(kills),
+                           FAKE_DOCKER_PID=str(pid_file))
+
+                terminate_like_the_runner([str(LISP_CHECK), "a.lisp"], self.run_dir, env,
+                                          pid_file.exists, sig)
+
+                self.assertTrue(wait_for(lambda: process_gone(int(pid_file.read_text())), 10))
+                args = self.docker_args()
+                name = args[args.index("--name") + 1]
+                self.assertIn(["kill", name], [json.loads(line) for line in kills.read_text().splitlines()])
 
     def test_no_timeout_unless_set(self):
         result = self.run_wrapper("a.lisp", stdout="OK\n", sleep=2)
@@ -200,6 +248,12 @@ class FakeNativeLispTest(unittest.TestCase):
         self.assertEqual(result.stdout, "lisp-check: timed out after 1 s\nFAIL\n")
         with self.assertRaises(ProcessLookupError):
             os.kill(self.alisp_call()["pid"], 0)
+
+    def test_killed_wrapper_kills_lisp(self):
+        terminate_like_the_runner([str(LISP_CHECK), "a.lisp"], self.run_dir,
+                                  dict(self.env, FAKE_ALISP_SLEEP="60"), self.args_file.exists)
+
+        self.assertTrue(wait_for(lambda: process_gone(self.alisp_call()["pid"]), 10))
 
     def test_lisp_gets_no_stdin_so_a_reading_program_cannot_hang(self):
         self.run_wrapper("a.lisp", stdin_text="agent input\n", stdout="OK\n")
@@ -393,6 +447,21 @@ class RealDockerTest(RealAllegroChecks, unittest.TestCase):
             capture_output=True, text=True, check=True,
         )
         self.assertEqual(containers.stdout, "")
+
+    def running_containers(self):
+        return subprocess.run(
+            ["docker", "ps", "-q", "--filter", f"volume={self.run_dir}"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+
+    def test_killed_wrapper_leaves_no_container_running(self):
+        self.write("endless.lisp", "(eval-when (:compile-toplevel :load-toplevel :execute) (loop))\n")
+
+        terminate_like_the_runner([str(LISP_CHECK), "endless.lisp"], self.run_dir, self.env,
+                                  lambda: self.running_containers() != "")
+
+        self.assertTrue(wait_for(lambda: self.running_containers() == "", 30),
+                        "a lisp-check container outlived the killed wrapper")
 
     def test_works_through_a_symlink_on_path(self):
         bin_dir = self.run_dir / "bin"

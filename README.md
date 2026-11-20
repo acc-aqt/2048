@@ -28,6 +28,8 @@ In Docker mode the current directory is mounted at the same path, so run it from
 
 Each invocation appends one tab-separated line to the log: UTC timestamp, exit code, arguments. One line is one check-fix round.
 
+If the wrapper gets SIGTERM, SIGINT or SIGHUP (for example when the runner kills OpenCode at a limit), it kills the check's process group and, in Docker mode, `docker kill`s its container, then exits 128 + signal number without a log line.
+
 | Env var | Default | Meaning |
 |---|---|---|
 | `LISP_CHECK_MODE` | `docker` | `docker`, or `native` (runs the upstream script directly with the installed Allegro, see "Running at work") |
