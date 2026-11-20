@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from harness.grade import grade
-from harness.opencode import isolated_env
+from harness.opencode import isolated_env, write_run_config
 from harness.preflight import DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL
 from harness.setups import SETUPS
 
@@ -72,8 +72,9 @@ def prepare_run_folder(run_folder):
     return work
 
 
-def opencode_env(run_folder):
-    env = isolated_env(run_folder / "opencode")
+def opencode_env(run_folder, setup):
+    state_dir = run_folder / "opencode"
+    env = isolated_env(state_dir, config_file=write_run_config(state_dir, setup.rules_file))
     env.setdefault("LLM_BASE_URL", DEFAULT_BASE_URL)
     env.setdefault("LLM_MODEL", DEFAULT_MODEL)
     env.setdefault("LLM_API_KEY", DEFAULT_API_KEY)
@@ -155,7 +156,7 @@ def main(argv):
     started = utc_now()
     run_folder = args.run_root / args.task / args.setup / f"{args.run_number}-{started:%Y%m%dT%H%M%SZ}"
     work = prepare_run_folder(run_folder)
-    env = opencode_env(run_folder)
+    env = opencode_env(run_folder, setup)
     opencode = os.environ.get("OPENCODE_BIN", "opencode")
     transcript = run_folder / "transcript.jsonl"
     message = PROMPT.format(spec=(task_dir / "spec.md").read_text(), note=setup.prompt_note)

@@ -17,6 +17,7 @@ REFERENCE = REPO / "reference" / "dummy-slide-row"
 WRONG = FIXTURES / "dummy-wrong-solution"
 HIDDEN_TEST = REPO / "tasks" / "dummy-slide-row" / "hidden-tests" / "slide-row-hidden-tests.lisp"
 SPEC = REPO / "tasks" / "dummy-slide-row" / "spec.md"
+LISP_RULES = REPO / "vendor" / "lisp-skills" / "dist" / "lisp-rules.md"
 
 
 class RunnerTestCase(unittest.TestCase):
@@ -80,7 +81,7 @@ class RunFolderTest(RunnerTestCase):
         self.assertTrue(seen["stdin_is_devnull"])
         self.assertEqual(seen["argv"][:3], ["run", "--format", "json"])
         self.assertIn(SPEC.read_text(), seen["argv"][-1])
-        self.assertEqual(seen["env"]["OPENCODE_CONFIG"], str(REPO / "harness" / "opencode.json"))
+        self.assertTrue(Path(seen["env"]["OPENCODE_CONFIG"]).is_relative_to(self.run_root))
         self.assertEqual(seen["env"]["OPENCODE_DISABLE_CLAUDE_CODE_PROMPT"], "1")
         self.assertTrue(Path(seen["env"]["XDG_CONFIG_HOME"]).is_relative_to(self.run_root))
 
@@ -106,6 +107,51 @@ class RunFolderTest(RunnerTestCase):
         first, second = self.seen()
         self.assertNotEqual(first["cwd"], second["cwd"])
         self.assertEqual(second["files"], [])
+
+
+class SetupTest(RunnerTestCase):
+    def setUp(self):
+        super().setUp()
+        self.use_fake_docker_printing_ok()
+
+    def run_both_setups(self):
+        self.run_task(setup="with-skills")
+        self.run_task(setup="without-skills")
+        return self.seen()
+
+    def test_with_skills_loads_the_pinned_rules_as_instructions_from_outside_the_model_folder(self):
+        with_skills, _ = self.run_both_setups()
+
+        (instruction,) = with_skills["config"]["instructions"]
+        self.assertTrue(Path(instruction).is_absolute())
+        self.assertEqual(Path(instruction).read_text(), LISP_RULES.read_text())
+        self.assertTrue(Path(instruction).is_relative_to(self.run_root))
+        self.assertFalse(Path(instruction).is_relative_to(with_skills["cwd"]))
+
+    def test_without_skills_never_sees_the_rules(self):
+        _, without_skills = self.run_both_setups()
+
+        self.assertNotIn("instructions", without_skills["config"])
+        run_folder = Path(without_skills["cwd"]).parent
+        rules = LISP_RULES.read_text()
+        for path in run_folder.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                self.assertNotIn(rules, path.read_text(errors="replace"), path)
+
+    def test_setups_differ_only_in_the_rules_text(self):
+        with_skills, without_skills = self.run_both_setups()
+
+        note = "Run lisp-check FILE until it prints OK."
+        self.assertEqual(with_skills["argv"][:-1], without_skills["argv"][:-1])
+        self.assertNotIn(note, with_skills["argv"][-1])
+        self.assertEqual(without_skills["argv"][-1].count(note), 1)
+        self.assertEqual(with_skills["argv"][-1].strip(),
+                         without_skills["argv"][-1].replace(note, "").strip())
+        with_config = dict(with_skills["config"])
+        del with_config["instructions"]
+        self.assertEqual(with_config, without_skills["config"])
+        self.assertEqual(without_skills["config"],
+                         json.loads((REPO / "harness" / "opencode.json").read_text()))
 
 
 class RecordTest(RunnerTestCase):

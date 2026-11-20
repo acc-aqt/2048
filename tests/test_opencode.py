@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness.opencode import PINNED_VERSION, isolated_env
+from harness.opencode import CONFIG_FILE, PINNED_VERSION, isolated_env, write_run_config
+from harness.setups import LISP_RULES
 
 
 def pinned_opencode_installed():
@@ -38,8 +39,8 @@ class ResolvedConfigTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def resolved_config(self, base_env):
-        env = isolated_env(self.root / "opencode", base_env=base_env)
+    def resolved_config(self, base_env, config_file=CONFIG_FILE):
+        env = isolated_env(self.root / "opencode", base_env=base_env, config_file=config_file)
         result = subprocess.run(
             ["opencode", "debug", "config"],
             cwd=self.project,
@@ -71,6 +72,15 @@ class ResolvedConfigTest(unittest.TestCase):
         for tool in ("task", "webfetch", "websearch", "question", "skill", "external_directory"):
             with self.subTest(tool=tool):
                 self.assertEqual(permission[tool], "deny")
+
+    def test_run_config_with_rules_loads_them_as_instructions(self):
+        config_file = write_run_config(self.root / "opencode", rules_file=LISP_RULES)
+
+        config = self.resolved_config(dict(os.environ), config_file=config_file)
+
+        (instruction,) = config["instructions"]
+        self.assertEqual(Path(instruction).read_text(), LISP_RULES.read_text())
+        self.assertEqual(config["model"], "local/qwen3")
 
     def test_litellm_endpoint_and_model_alias_come_from_env_only(self):
         # `opencode debug config` masks apiKey as "***" whether set or not, so it can't be checked here.

@@ -44,6 +44,7 @@ def record():
         "has_git": (cwd / ".git").is_dir(),
         "stdin_is_devnull": stdin_is_devnull(),
         "env": {key: os.environ.get(key) for key in RECORDED_ENV},
+        "config": json.loads(Path(os.environ["OPENCODE_CONFIG"]).read_text()),
     }
     with open(path, "a") as f:
         f.write(json.dumps(seen) + "\n")
