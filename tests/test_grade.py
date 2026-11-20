@@ -41,6 +41,25 @@ class GradeWithFakeDockerTest(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertIn("timed out after 1 s", result["log"])
 
+    def test_docker_warnings_on_stderr_do_not_turn_ok_into_fail(self):
+        os.environ["FAKE_DOCKER_STDERR"] = ("WARNING: The requested image's platform (linux/amd64) does not match"
+                                            " the detected host platform (linux/arm64/v8)\n")
+
+        result = grade(self.project, HIDDEN, self.root / "grading")
+
+        self.assertEqual(set(result["source_files"].values()), {"OK"})
+        self.assertEqual(result["hidden_tests_passed"], result["hidden_tests_total"])
+        self.assertTrue(result["passed"])
+
+    def test_ok_with_a_failing_exit_code_is_a_failure(self):
+        os.environ["FAKE_DOCKER_EXIT"] = "1"
+
+        result = grade(self.project, HIDDEN, self.root / "grading")
+
+        self.assertEqual(set(result["source_files"].values()), {"FAIL"})
+        self.assertEqual(result["hidden_tests_passed"], 0)
+        self.assertFalse(result["passed"])
+
     def test_a_required_file_that_does_not_exist_is_missing(self):
         (self.project / "slide-row.lisp").unlink()
 

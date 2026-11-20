@@ -23,19 +23,24 @@ def count_assertions(path):
     return len(ASSERTION.findall(path.read_text()))
 
 
-def assertions_passed(output, total):
-    if output.splitlines()[-1:] == ["OK"]:
+def printed_ok(result):
+    """Like preflight: exit code 0 and OK as the last line of stdout. Stderr (Docker warnings) is ignored."""
+    return result.returncode == 0 and result.stdout.splitlines()[-1:] == ["OK"]
+
+
+def assertions_passed(result, total):
+    if printed_ok(result):
         return total
-    failed = FAILED_ASSERTIONS.search(output)
+    failed = FAILED_ASSERTIONS.search(result.stdout)
     if failed:
         return int(failed.group(2)) - int(failed.group(1))
     return 0
 
 
-def status(output):
-    if output.splitlines()[-1:] == ["OK"]:
+def status(result):
+    if printed_ok(result):
         return "OK"
-    return "TIMEOUT" if TIMED_OUT.search(output) else "FAIL"
+    return "TIMEOUT" if TIMED_OUT.search(result.stdout) else "FAIL"
 
 
 def lisp_check(relative, cwd, test, check_timeout):
@@ -47,8 +52,7 @@ def lisp_check(relative, cwd, test, check_timeout):
         [str(LISP_CHECK), *args], cwd=cwd, env=env,
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
     )
-    output = result.stdout + result.stderr
-    return output, f"$ lisp-check {' '.join(args)}\n{output}"
+    return result, f"$ lisp-check {' '.join(args)}\n{result.stdout}{result.stderr}"
 
 
 def copy_project(project_dir, grading_dir):
@@ -77,8 +81,8 @@ def check_project_files(grading_dir, required_files=(), check_timeout=DEFAULT_CH
         if name not in present:
             statuses[name] = "MISSING"
             continue
-        output, entry = lisp_check(Path(name), grading_dir, is_test_file(Path(name)), check_timeout)
-        statuses[name] = status(output)
+        result, entry = lisp_check(Path(name), grading_dir, is_test_file(Path(name)), check_timeout)
+        statuses[name] = status(result)
         log.append(entry)
     return statuses, log
 
@@ -100,9 +104,9 @@ def grade(project_dir, hidden_tests_dir, grading_dir, required_files=(), check_t
     total = passed = 0
     for relative in hidden_files:
         file_total = count_assertions(grading_dir / relative)
-        output, entry = lisp_check(relative, grading_dir, True, check_timeout)
+        result, entry = lisp_check(relative, grading_dir, True, check_timeout)
         total += file_total
-        passed += assertions_passed(output, file_total)
+        passed += assertions_passed(result, file_total)
         log.append(entry)
 
     return {
