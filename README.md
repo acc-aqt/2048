@@ -51,6 +51,37 @@ Run it before any long run. It checks that `lisp-check` prints OK on a correct f
 
 `harness/opencode.json` defines the provider `local` with model `local/qwen3`, taking base URL, API key and model name from the same `LLM_*` variables, with the context limit set to 32768. Set all three variables; an unset one becomes an empty string. Start OpenCode with the environment from `harness.opencode.isolated_env(state_dir)`. That environment moves every OpenCode config, data, state and cache directory into `state_dir`, loads `harness/opencode.json` as the config file, and sets `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`. So no global OpenCode config and no `~/.claude/CLAUDE.md` is used.
 
+The config allows every tool without asking, but denies `task` (subagents), `webfetch`, `websearch`, `question`, `skill` and `external_directory` (anything outside the run folder).
+
+## Running an experiment
+
+### Tasks
+
+A task lives in `tasks/<task-name>/`:
+
+- `spec.md`: the task text. The runner puts it into the prompt.
+- `hidden-tests/*.lisp`: tester files graded after the run, never present during it. They are copied to the same relative path in the root of a grading copy of the model's folder, next to its `.asd`. Write every assertion as one top-level `(test ...)`/`(test-error ...)` form: the grader counts them to get the total. An error while loading a hidden test file (for example a missing function) means 0 passed for that file.
+
+A private reference solution lives in `reference/<task-name>/`. It only validates the hidden tests (see `tests/test_dummy_task.py`); the runner never reads it. `tasks/dummy-slide-row` is a tiny task (only `slide-row`) for trying the chain end to end.
+
+### `bin/run-task`
+
+```sh
+bin/run-task TASK SETUP RUN_NUMBER [--run-root DIR] [--records-dir DIR] [--timeout SECONDS]
+bin/run-task dummy-slide-row without-skills 0
+```
+
+`SETUP` is `with-skills` or `without-skills` (placeholders for now; issue #5 fills them in). One call:
+
+1. Creates a fresh run folder `<run root>/<task>/<setup>/<run>-<UTC time>/` with `work/` (the model's folder: an empty `git init` repo), `bin/lisp-check`, the OpenCode state directory and the round log, which stays outside `work/`. The run root (default `$RUN_ROOT` or `/tmp/2048-runs`) must be outside the repo and outside `$HOME`.
+2. Runs `opencode run --format json --thinking` once in `work/`, with the fixed prompt and the spec, stdin closed and the isolated environment. After `--timeout` seconds (default 7200) the whole process group is killed.
+3. Exports the session with `opencode export`, then grades: every `.lisp` file in `work/` through `lisp-check` (`--test` for `*tests.lisp`) and the hidden tests with `lisp-check --test`, all in a copy of `work/`. These grading checks don't count as rounds.
+4. Writes `runs/<task>/<setup>/<run>/`: `result.json`, `transcript.jsonl` (the JSON event stream), `session.json` (the export), `opencode.stderr.log`, `lisp-check.log` (one line per round), `grading.log` and `src/` (the model's final files). It refuses to overwrite an existing record.
+
+`result.json` holds task, setup, run number, model, start time, duration, `timed_out`, OpenCode exit code, `check_fix_rounds`, `hidden_tests_passed`/`hidden_tests_total`, per-file `lisp-check` status and `passed` (every file OK, every hidden assertion passed, no timeout).
+
+The tests drive `bin/run-task` with `tests/fixtures/fake-opencode` (set through `OPENCODE_BIN`), so they never contact a model.
+
 ## Running at work (openSUSE + LiteLLM)
 
 Target: openSUSE Linux x86_64 with Allegro CL installed natively, Python 3, no Docker, Qwen3-8B FP8 behind LiteLLM. Only environment variables change; the code is the same as on the Mac.

@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Stand-in for `opencode` in tests. Sends nothing to any model.
+
+`run`: appends what it saw to $FAKE_OPENCODE_RECORD, copies $FAKE_OPENCODE_SOLUTION
+into the current folder, runs lisp-check on each .lisp file and prints JSON events.
+FAKE_OPENCODE_SCENARIO=hang makes it hang instead.
+`export ID`: prints a small session JSON.
+"""
+
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+SESSION_ID = "ses_fake0001"
+RECORDED_ENV = (
+    "OPENCODE_CONFIG", "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT", "XDG_CONFIG_HOME",
+    "LISP_CHECK_LOG", "LLM_MODEL", "PATH",
+)
+
+
+def stdin_is_devnull():
+    stdin, null = os.fstat(0), os.stat(os.devnull)
+    return stat.S_ISCHR(stdin.st_mode) and stdin.st_rdev == null.st_rdev
+
+
+def record():
+    path = os.environ.get("FAKE_OPENCODE_RECORD")
+    if not path:
+        return
+    cwd = Path.cwd()
+    files = sorted(
+        str(p.relative_to(cwd)) for p in cwd.rglob("*")
+        if p.relative_to(cwd).parts[0] != ".git"
+    )
+    seen = {
+        "argv": sys.argv[1:],
+        "cwd": str(cwd),
+        "files": files,
+        "has_git": (cwd / ".git").is_dir(),
+        "stdin_is_devnull": stdin_is_devnull(),
+        "env": {key: os.environ.get(key) for key in RECORDED_ENV},
+    }
+    with open(path, "a") as f:
+        f.write(json.dumps(seen) + "\n")
+
+
+def emit(event_type, **data):
+    event = {"type": event_type, "timestamp": int(time.time() * 1000), "sessionID": SESSION_ID}
+    print(json.dumps({**event, **data}), flush=True)
+
+
+def run():
+    record()
+    if os.environ.get("FAKE_OPENCODE_SCENARIO") == "hang":
+        emit("step_start", part={"type": "step-start"})
+        time.sleep(3600)
+    solution = os.environ.get("FAKE_OPENCODE_SOLUTION")
+    if solution:
+        for source in sorted(Path(solution).iterdir()):
+            shutil.copy2(source, source.name)
+    for path in sorted(Path.cwd().glob("*.lisp")):
+        args = ["lisp-check"] + (["--test"] if path.name.endswith("tests.lisp") else []) + [path.name]
+        result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        emit("tool_use", part={
+            "type": "tool", "tool": "bash",
+            "state": {"status": "completed", "input": {"command": " ".join(args)},
+                      "output": result.stdout},
+        })
+    emit("text", part={"type": "text", "text": "Done."})
+    return 0
+
+
+def export(session_id):
+    print(json.dumps({"info": {"id": session_id}, "messages": []}))
+    return 0
+
+
+def main(args):
+    if args[:1] == ["run"]:
+        return run()
+    if args[:1] == ["export"] and len(args) == 2:
+        return export(args[1])
+    if args == ["--version"]:
+        print("1.19.6")
+        return 0
+    print(f"fake-opencode: unsupported arguments {args}", file=sys.stderr)
+    return 2
+
+
+sys.exit(main(sys.argv[1:]))

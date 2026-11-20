@@ -1,0 +1,91 @@
+"""Grade a project folder: check every .lisp file, then run the hidden tests on a copy."""
+
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+LISP_CHECK = Path(__file__).resolve().parent.parent / "bin" / "lisp-check"
+
+ASSERTION = re.compile(r"^\((?:util\.test:)?test(?:-[a-z-]+)?[\s)]", re.MULTILINE)
+FAILED_ASSERTIONS = re.compile(r": test: (\d+) of (\d+) assertions failed")
+
+
+def is_test_file(path):
+    return path.name.endswith("tests.lisp")
+
+
+def count_assertions(path):
+    """Hidden test files keep one assertion per top-level tester form, so they can be counted."""
+    return len(ASSERTION.findall(path.read_text()))
+
+
+def assertions_passed(output, total):
+    if output.splitlines()[-1:] == ["OK"]:
+        return total
+    failed = FAILED_ASSERTIONS.search(output)
+    if failed:
+        return int(failed.group(2)) - int(failed.group(1))
+    return 0
+
+
+def lisp_check(relative, cwd, test):
+    args = (["--test"] if test else []) + [str(relative)]
+    env = dict(os.environ, LISP_CHECK_LOG=str(cwd / ".grading-lisp-check.log"))
+    result = subprocess.run(
+        [str(LISP_CHECK), *args], cwd=cwd, env=env,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+    )
+    output = result.stdout + result.stderr
+    return output, f"$ lisp-check {' '.join(args)}\n{output}"
+
+
+def copy_project(project_dir, grading_dir):
+    shutil.copytree(project_dir, grading_dir, ignore=shutil.ignore_patterns(".git"))
+    (grading_dir / ".git").mkdir(exist_ok=True)
+
+
+def copy_hidden_tests(hidden_tests_dir, grading_dir):
+    hidden = []
+    for source in sorted(hidden_tests_dir.rglob("*.lisp")):
+        relative = source.relative_to(hidden_tests_dir)
+        target = grading_dir / relative
+        if target.exists():
+            raise ValueError(f"hidden test {relative} would overwrite a project file")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        hidden.append(relative)
+    return hidden
+
+
+def grade(project_dir, hidden_tests_dir, grading_dir):
+    """Grade PROJECT_DIR in a fresh GRADING_DIR; PROJECT_DIR itself is never changed."""
+    project_dir, hidden_tests_dir, grading_dir = map(Path, (project_dir, hidden_tests_dir, grading_dir))
+    copy_project(project_dir, grading_dir)
+    project_files = sorted(p.relative_to(grading_dir) for p in grading_dir.rglob("*.lisp"))
+    hidden_files = copy_hidden_tests(hidden_tests_dir, grading_dir)
+
+    log = []
+    source_files = {}
+    for relative in project_files:
+        output, entry = lisp_check(relative, grading_dir, is_test_file(relative))
+        source_files[str(relative)] = "OK" if output.splitlines()[-1:] == ["OK"] else "FAIL"
+        log.append(entry)
+
+    total = passed = 0
+    for relative in hidden_files:
+        file_total = count_assertions(grading_dir / relative)
+        output, entry = lisp_check(relative, grading_dir, test=True)
+        total += file_total
+        passed += assertions_passed(output, file_total)
+        log.append(entry)
+
+    return {
+        "source_files": source_files,
+        "hidden_tests_passed": passed,
+        "hidden_tests_total": total,
+        "passed": bool(source_files) and set(source_files.values()) == {"OK"}
+                  and total > 0 and passed == total,
+        "log": "\n".join(log),
+    }
