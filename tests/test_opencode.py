@@ -64,6 +64,21 @@ class ResolvedConfigTest(unittest.TestCase):
         model = config["provider"]["local"]["models"]["qwen3"]
         self.assertEqual(model["limit"]["context"], 32768)
 
+    def test_litellm_endpoint_and_model_alias_come_from_env_only(self):
+        # `opencode debug config` masks apiKey as "***" whether set or not, so it can't be checked here.
+        base_env = dict(
+            os.environ,
+            LLM_BASE_URL="https://litellm.example.internal/v1",
+            LLM_API_KEY="sk-litellm-test",
+            LLM_MODEL="qwen3-8b-fp8",
+        )
+
+        config = self.resolved_config(base_env)
+
+        provider = config["provider"]["local"]
+        self.assertEqual(provider["options"]["baseURL"], "https://litellm.example.internal/v1")
+        self.assertEqual(provider["models"]["qwen3"]["id"], "qwen3-8b-fp8")
+
 
 if __name__ == "__main__":
     unittest.main()
