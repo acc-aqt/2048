@@ -9,12 +9,17 @@ if sys.argv[1:2] == ["kill"]:
     if kills_file:
         with open(kills_file, "a") as f:
             f.write(json.dumps(sys.argv[1:]) + "\n")
+    time.sleep(float(os.environ.get("FAKE_DOCKER_KILL_SLEEP", "0")))
     sys.exit(0)
 
 args_file = os.environ.get("FAKE_DOCKER_ARGS")
 if args_file:
     with open(args_file, "w") as f:
         json.dump(sys.argv[1:], f)
+pid_file = os.environ.get("FAKE_DOCKER_PID")
+if pid_file:
+    with open(pid_file, "w") as f:
+        f.write(str(os.getpid()))
 time.sleep(float(os.environ.get("FAKE_DOCKER_SLEEP", "0")))
 sys.stdout.write(os.environ.get("FAKE_DOCKER_STDOUT", ""))
 sys.stderr.write(os.environ.get("FAKE_DOCKER_STDERR", ""))

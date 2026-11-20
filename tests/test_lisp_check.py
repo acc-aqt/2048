@@ -1,10 +1,16 @@
+import contextlib
+import io
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from harness import lisp_check
 
 REPO = Path(__file__).resolve().parent.parent
 LISP_CHECK = REPO / "bin" / "lisp-check"
@@ -221,6 +227,57 @@ class FakeNativeLispTest(unittest.TestCase):
         lines = (self.run_dir / ".lisp-check.log").read_text().splitlines()
         fields = [line.split("\t") for line in lines]
         self.assertEqual([f[1:] for f in fields], [["0", "a.lisp"], ["1", "--test", "a.lisp"]])
+
+
+class TimeoutCleanupFailureTest(unittest.TestCase):
+    """The timeout path still prints its FAIL lines and logs when cleaning up goes wrong."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.run_dir = Path(self.tmp.name).resolve()
+        (self.run_dir / "a.lisp").write_text("(defun add1 (x) (+ x 1))\n")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("LISP_CHECK_", "FAKE_"))}
+        env.update(LISP_CHECK_TIMEOUT="1", LISP_CHECK_LOG=str(self.run_dir / "rounds.log"))
+        patcher = mock.patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        cwd = os.getcwd()
+        os.chdir(self.run_dir)
+        self.addCleanup(os.chdir, cwd)
+
+    def run_main(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = lisp_check.main(["a.lisp"])
+        return code, out.getvalue()
+
+    def assert_timed_out_and_logged(self, code, stdout):
+        self.assertEqual((stdout, code), ("lisp-check: timed out after 1 s\nFAIL\n", 2))
+        lines = (self.run_dir / "rounds.log").read_text().splitlines()
+        self.assertEqual([line.split("\t")[1:] for line in lines], [["2", "a.lisp"]])
+
+    def test_child_that_exits_just_before_the_kill(self):
+        os.environ.update(LISP_CHECK_MODE="native", LISP_BIN=str(FAKE_ALISP), FAKE_ALISP_SLEEP="60")
+        real_killpg = os.killpg
+
+        def kill_then_report_gone(pid, sig):
+            real_killpg(pid, sig)
+            raise ProcessLookupError
+
+        with mock.patch.object(lisp_check.os, "killpg", side_effect=kill_then_report_gone):
+            code, stdout = self.run_main()
+
+        self.assert_timed_out_and_logged(code, stdout)
+
+    def test_docker_kill_that_hangs(self):
+        os.environ.update(LISP_CHECK_MODE="docker", LISP_CHECK_DOCKER=str(FAKE_DOCKER),
+                          FAKE_DOCKER_SLEEP="60", FAKE_DOCKER_KILL_SLEEP="30")
+
+        with mock.patch.object(lisp_check, "DOCKER_KILL_TIMEOUT", 1):
+            code, stdout = self.run_main()
+
+        self.assert_timed_out_and_logged(code, stdout)
 
 
 def docker_image_available():

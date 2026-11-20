@@ -31,6 +31,7 @@ def docker_command(args, cwd, name):
 
 UPSTREAM_EXIT_CODES = (0, 1, 2)
 TOOL_ERROR = 2
+DOCKER_KILL_TIMEOUT = 60
 
 
 def tool_error(reason):
@@ -40,6 +41,14 @@ def tool_error(reason):
 
 def timeout_setting():
     return os.environ.get("LISP_CHECK_TIMEOUT") or None
+
+
+def kill_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.communicate()
 
 
 def run_limited(command):
@@ -52,14 +61,21 @@ def run_limited(command):
     try:
         stdout, stderr = process.communicate(timeout=float(timeout) if timeout else None)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
-        process.communicate()
+        kill_group(process)
         raise
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def timed_out():
     return tool_error(f"timed out after {timeout_setting()} s")
+
+
+def kill_container(name):
+    try:
+        subprocess.run([docker_binary(), "kill", name], stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=DOCKER_KILL_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def run_docker(args):
@@ -71,8 +87,7 @@ def run_docker(args):
     except OSError as error:
         return tool_error(f"could not start docker ({command[0]}): {error}")
     except subprocess.TimeoutExpired:
-        subprocess.run([docker_binary(), "kill", name], stdin=subprocess.DEVNULL,
-                       capture_output=True, timeout=60)
+        kill_container(name)
         return timed_out()
     if result.returncode not in UPSTREAM_EXIT_CODES:
         details = " ".join(result.stderr.split()) or "no error output"
