@@ -23,6 +23,8 @@ LISP_CHECK = REPO / "bin" / "lisp-check"
 DEFAULT_RUN_ROOT = "/tmp/2048-runs"
 DEFAULT_RECORDS = REPO / "runs"
 DEFAULT_TIMEOUT = 7200
+DEFAULT_MAX_ROUNDS = 40
+POLL_SECONDS = 0.2
 KILL_GRACE_SECONDS = 10
 EXPORT_TIMEOUT = 120
 
@@ -65,8 +67,10 @@ def parse_args(argv):
                         help=f"where run folders are created (default $RUN_ROOT or {DEFAULT_RUN_ROOT})")
     parser.add_argument("--records-dir", default=str(DEFAULT_RECORDS),
                         help="where result records go (default: runs/ in the repo)")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
-                        help=f"wall-clock seconds before OpenCode is killed (default {DEFAULT_TIMEOUT})")
+    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
+                        help=f"wall-clock seconds before OpenCode is killed and the run fails (default {DEFAULT_TIMEOUT})")
+    parser.add_argument("--max-rounds", type=int, default=DEFAULT_MAX_ROUNDS,
+                        help=f"check-fix rounds before OpenCode is killed and the run fails (default {DEFAULT_MAX_ROUNDS})")
     args = parser.parse_args(argv)
 
     if not (TASKS / args.task / "spec.md").is_file():
@@ -114,22 +118,41 @@ def kill_group(process, sig):
         pass
 
 
-def run_opencode(opencode, run_args, work, env, transcript, stderr_log, timeout):
-    """Run one `opencode run` turn; return (exit code, timed out). Never waits past TIMEOUT."""
+def wait_within_limits(process, timeout, round_log, max_rounds):
+    """Wait for PROCESS; return the limit hit first ("rounds" or "wall_clock"), or None if it exited."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if count_rounds(round_log) >= max_rounds:
+            return "rounds"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return "wall_clock"
+        try:
+            process.wait(timeout=min(POLL_SECONDS, remaining))
+            return "rounds" if count_rounds(round_log) >= max_rounds else None
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def run_opencode(opencode, run_args, work, env, transcript, stderr_log, timeout, round_log, max_rounds):
+    """Run one `opencode run` turn; return (exit code, limit hit or None).
+
+    The whole process group is killed once TIMEOUT seconds pass or ROUND_LOG reaches MAX_ROUNDS lines.
+    """
     command = [opencode, "run", "--format", "json", "--thinking", *run_args]
     with open(transcript, "a") as out, open(stderr_log, "a") as err:
         process = subprocess.Popen(command, cwd=work, env=env, stdin=subprocess.DEVNULL,
                                    stdout=out, stderr=err, start_new_session=True)
         try:
-            return process.wait(timeout=timeout), False
-        except subprocess.TimeoutExpired:
-            kill_group(process, signal.SIGTERM)
-            try:
-                process.wait(timeout=KILL_GRACE_SECONDS)
-            except subprocess.TimeoutExpired:
-                kill_group(process, signal.SIGKILL)
-                process.wait()
-            return process.returncode, True
+            limit_hit = wait_within_limits(process, timeout, round_log, max_rounds)
+            if limit_hit:
+                kill_group(process, signal.SIGTERM)
+                try:
+                    process.wait(timeout=KILL_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    kill_group(process, signal.SIGKILL)
+                    process.wait()
+            return process.returncode, limit_hit
         finally:
             kill_group(process, signal.SIGKILL)
 
@@ -191,16 +214,17 @@ def main(argv):
     def turn(run_args):
         remaining = max(deadline - time.monotonic(), 0)
         return run_opencode(opencode, run_args, work, env, transcript,
-                            run_folder / "opencode.stderr.log", remaining)
+                            run_folder / "opencode.stderr.log", remaining,
+                            run_folder / "lisp-check.log", args.max_rounds)
 
     clock = time.monotonic()
     deadline = clock + args.timeout
-    exit_code, timed_out = turn([message])
+    exit_code, limit_hit = turn([message])
     sid = session_id(transcript)
     continue_sent = False
-    if not timed_out and sid and not all_files_ok(work, run_folder / "status-check", required):
+    if not limit_hit and sid and not all_files_ok(work, run_folder / "status-check", required):
         continue_sent = True
-        exit_code, timed_out = turn(["-s", sid, CONTINUE_MESSAGE])
+        exit_code, limit_hit = turn(["-s", sid, CONTINUE_MESSAGE])
     duration = time.monotonic() - clock
 
     if sid:
@@ -214,14 +238,15 @@ def main(argv):
         "model": env["LLM_MODEL"],
         "started_at": started.isoformat(timespec="seconds"),
         "duration_seconds": round(duration, 1),
-        "timed_out": timed_out,
+        "limits": {"max_rounds": args.max_rounds, "timeout_seconds": args.timeout},
+        "limit_hit": limit_hit,
         "opencode_exit_code": exit_code,
         "continue_sent": continue_sent,
         "check_fix_rounds": count_rounds(run_folder / "lisp-check.log"),
         "hidden_tests_passed": grading["hidden_tests_passed"],
         "hidden_tests_total": grading["hidden_tests_total"],
         "source_files": grading["source_files"],
-        "passed": grading["passed"] and not timed_out,
+        "passed": grading["passed"] and not limit_hit,
         "session_id": sid,
         "run_folder": str(run_folder),
     }

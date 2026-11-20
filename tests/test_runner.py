@@ -183,7 +183,7 @@ class RecordTest(RunnerTestCase):
         self.assertEqual(result["run_number"], 1)
         self.assertEqual(result["check_fix_rounds"], 3)
         self.assertEqual(result["opencode_exit_code"], 0)
-        self.assertFalse(result["timed_out"])
+        self.assertIsNone(result["limit_hit"])
         self.assertGreaterEqual(result["duration_seconds"], 0)
         for key in ("hidden_tests_passed", "hidden_tests_total", "passed", "session_id"):
             self.assertIn(key, result)
@@ -264,9 +264,12 @@ class ContinueTest(RunnerTestCase):
         self.assertEqual(self.result()["check_fix_rounds"], 6)
 
 
-class TimeoutTest(RunnerTestCase):
-    def test_hanging_opencode_is_killed_and_the_run_still_recorded(self):
+class LimitTest(RunnerTestCase):
+    def setUp(self):
+        super().setUp()
         self.use_fake_docker_printing_ok()
+
+    def test_hanging_opencode_is_killed_at_the_wall_clock_limit_and_the_run_still_recorded(self):
         self.env["FAKE_OPENCODE_SCENARIO"] = "hang"
         start = time.monotonic()
 
@@ -274,9 +277,42 @@ class TimeoutTest(RunnerTestCase):
 
         self.assertLess(time.monotonic() - start, 60)
         result = self.result()
-        self.assertTrue(result["timed_out"])
+        self.assertEqual(result["limit_hit"], "wall_clock")
         self.assertFalse(result["passed"])
+        self.assertFalse(result["continue_sent"])
         self.assertTrue((self.record_dir() / "transcript.jsonl").is_file())
+
+    def test_endless_check_fix_rounds_stop_at_40_rounds(self):
+        self.env["FAKE_OPENCODE_SCENARIO"] = "endless-checks"
+        start = time.monotonic()
+
+        self.run_task()
+
+        self.assertLess(time.monotonic() - start, 120)
+        result = self.result()
+        self.assertEqual(result["limit_hit"], "rounds")
+        self.assertGreaterEqual(result["check_fix_rounds"], 40)
+        self.assertLess(result["check_fix_rounds"], 45)
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["continue_sent"])
+        self.assertEqual(result["limits"], {"max_rounds": 40, "timeout_seconds": 7200})
+
+    def test_round_limit_can_be_set(self):
+        self.env["FAKE_OPENCODE_SCENARIO"] = "endless-checks"
+
+        self.run_task("--max-rounds", "5")
+
+        result = self.result()
+        self.assertEqual(result["limit_hit"], "rounds")
+        self.assertEqual(result["limits"]["max_rounds"], 5)
+        self.assertLess(result["check_fix_rounds"], 10)
+
+    def test_no_limit_hit_on_a_normal_run(self):
+        self.env["FAKE_OPENCODE_SOLUTION"] = str(WRONG)
+
+        self.run_task()
+
+        self.assertIsNone(self.result()["limit_hit"])
 
 
 class ArgumentTest(RunnerTestCase):
