@@ -2,10 +2,12 @@
 import json
 import os
 import sys
+import time
 
 args_file = os.environ.get("FAKE_ALISP_ARGS")
 if args_file:
     with open(args_file, "w") as f:
-        json.dump({"args": sys.argv[1:], "stdin": sys.stdin.read()}, f)
+        json.dump({"args": sys.argv[1:], "stdin": sys.stdin.read(), "pid": os.getpid()}, f)
+time.sleep(float(os.environ.get("FAKE_ALISP_SLEEP", "0")))
 sys.stdout.write(os.environ.get("FAKE_ALISP_STDOUT", ""))
 sys.exit(int(os.environ.get("FAKE_ALISP_EXIT", "0")))

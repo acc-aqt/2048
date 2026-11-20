@@ -1,8 +1,10 @@
 """lisp-check wrapper: runs the pinned upstream lisp-check in Docker or natively."""
 
 import os
+import signal
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,11 +13,14 @@ PLUGIN_DIR = REPO / "vendor" / "lisp-skills" / "plugins" / "lisp-skills"
 CONTAINER_PLUGIN_DIR = "/opt/lisp-skills"
 
 
-def docker_command(args, cwd):
-    docker = os.environ.get("LISP_CHECK_DOCKER", "docker")
+def docker_binary():
+    return os.environ.get("LISP_CHECK_DOCKER", "docker")
+
+
+def docker_command(args, cwd, name):
     image = os.environ.get("LISP_CHECK_IMAGE", "lisp-skills-allegro:latest")
     return [
-        docker, "run", "--rm", "--platform", "linux/amd64",
+        docker_binary(), "run", "--rm", "--name", name, "--platform", "linux/amd64",
         "-v", f"{PLUGIN_DIR}:{CONTAINER_PLUGIN_DIR}:ro",
         "-v", f"{cwd}:{cwd}",
         "-w", str(cwd),
@@ -33,15 +38,42 @@ def tool_error(reason):
     return TOOL_ERROR
 
 
+def timeout_setting():
+    return os.environ.get("LISP_CHECK_TIMEOUT") or None
+
+
+def run_limited(command):
+    """Run COMMAND without stdin; after LISP_CHECK_TIMEOUT seconds kill its whole process group."""
+    timeout = timeout_setting()
+    process = subprocess.Popen(
+        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=float(timeout) if timeout else None)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def timed_out():
+    return tool_error(f"timed out after {timeout_setting()} s")
+
+
 def run_docker(args):
     cwd = Path.cwd()
-    command = docker_command(args, cwd)
+    name = f"lisp-check-{uuid.uuid4().hex[:12]}"
+    command = docker_command(args, cwd, name)
     try:
-        result = subprocess.run(
-            command, stdin=subprocess.DEVNULL, capture_output=True, text=True
-        )
+        result = run_limited(command)
     except OSError as error:
         return tool_error(f"could not start docker ({command[0]}): {error}")
+    except subprocess.TimeoutExpired:
+        subprocess.run([docker_binary(), "kill", name], stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=60)
+        return timed_out()
     if result.returncode not in UPSTREAM_EXIT_CODES:
         details = " ".join(result.stderr.split()) or "no error output"
         return tool_error(f"docker failed with exit {result.returncode}: {details}")
@@ -53,11 +85,11 @@ def run_docker(args):
 def run_native(args):
     command = [str(PLUGIN_DIR / "bin" / "lisp-check"), *args]
     try:
-        result = subprocess.run(
-            command, stdin=subprocess.DEVNULL, capture_output=True, text=True
-        )
+        result = run_limited(command)
     except OSError as error:
         return tool_error(f"could not start {command[0]}: {error}")
+    except subprocess.TimeoutExpired:
+        return timed_out()
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
     return result.returncode

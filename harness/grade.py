@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 
 LISP_CHECK = Path(__file__).resolve().parent.parent / "bin" / "lisp-check"
+DEFAULT_CHECK_TIMEOUT = 600
+TIMED_OUT = re.compile(r"^lisp-check: timed out after ", re.MULTILINE)
 
 ASSERTION = re.compile(r"^\((?:util\.test:)?test(?:-[a-z-]+)?[\s)]", re.MULTILINE)
 FAILED_ASSERTIONS = re.compile(r": test: (\d+) of (\d+) assertions failed")
@@ -30,9 +32,17 @@ def assertions_passed(output, total):
     return 0
 
 
-def lisp_check(relative, cwd, test):
+def status(output):
+    if output.splitlines()[-1:] == ["OK"]:
+        return "OK"
+    return "TIMEOUT" if TIMED_OUT.search(output) else "FAIL"
+
+
+def lisp_check(relative, cwd, test, check_timeout):
+    """One lisp-check that is not a model round: own log, killed after CHECK_TIMEOUT seconds."""
     args = (["--test"] if test else []) + [str(relative)]
-    env = dict(os.environ, LISP_CHECK_LOG=str(cwd / ".grading-lisp-check.log"))
+    env = dict(os.environ, LISP_CHECK_LOG=str(cwd / ".grading-lisp-check.log"),
+               LISP_CHECK_TIMEOUT=str(check_timeout))
     result = subprocess.run(
         [str(LISP_CHECK), *args], cwd=cwd, env=env,
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
@@ -59,38 +69,38 @@ def copy_hidden_tests(hidden_tests_dir, grading_dir):
     return hidden
 
 
-def check_project_files(grading_dir, required_files=()):
-    """lisp-check every .lisp file in GRADING_DIR; a required file that doesn't exist is MISSING."""
+def check_project_files(grading_dir, required_files=(), check_timeout=DEFAULT_CHECK_TIMEOUT):
+    """lisp-check every .lisp file in GRADING_DIR: OK, FAIL, TIMEOUT, or MISSING for an absent required file."""
     present = {str(p.relative_to(grading_dir)) for p in grading_dir.rglob("*.lisp")}
     statuses, log = {}, []
     for name in sorted(present | {name for name in required_files if name.endswith(".lisp")}):
         if name not in present:
             statuses[name] = "MISSING"
             continue
-        output, entry = lisp_check(Path(name), grading_dir, is_test_file(Path(name)))
-        statuses[name] = "OK" if output.splitlines()[-1:] == ["OK"] else "FAIL"
+        output, entry = lisp_check(Path(name), grading_dir, is_test_file(Path(name)), check_timeout)
+        statuses[name] = status(output)
         log.append(entry)
     return statuses, log
 
 
-def all_files_ok(project_dir, check_dir, required_files=()):
+def all_files_ok(project_dir, check_dir, required_files=(), check_timeout=DEFAULT_CHECK_TIMEOUT):
     """True if every required and every present .lisp file in PROJECT_DIR prints OK, checked in a copy."""
     copy_project(Path(project_dir), Path(check_dir))
-    statuses, _ = check_project_files(Path(check_dir), required_files)
+    statuses, _ = check_project_files(Path(check_dir), required_files, check_timeout)
     return bool(statuses) and set(statuses.values()) == {"OK"}
 
 
-def grade(project_dir, hidden_tests_dir, grading_dir, required_files=()):
+def grade(project_dir, hidden_tests_dir, grading_dir, required_files=(), check_timeout=DEFAULT_CHECK_TIMEOUT):
     """Grade PROJECT_DIR in a fresh GRADING_DIR; PROJECT_DIR itself is never changed."""
     project_dir, hidden_tests_dir, grading_dir = map(Path, (project_dir, hidden_tests_dir, grading_dir))
     copy_project(project_dir, grading_dir)
-    source_files, log = check_project_files(grading_dir, required_files)
+    source_files, log = check_project_files(grading_dir, required_files, check_timeout)
     hidden_files = copy_hidden_tests(hidden_tests_dir, grading_dir)
 
     total = passed = 0
     for relative in hidden_files:
         file_total = count_assertions(grading_dir / relative)
-        output, entry = lisp_check(relative, grading_dir, test=True)
+        output, entry = lisp_check(relative, grading_dir, True, check_timeout)
         total += file_total
         passed += assertions_passed(output, file_total)
         log.append(entry)

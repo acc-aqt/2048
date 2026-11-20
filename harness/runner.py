@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness.grade import all_files_ok, grade, is_test_file
+from harness.grade import DEFAULT_CHECK_TIMEOUT, all_files_ok, grade, is_test_file
 from harness.opencode import isolated_env, write_run_config
 from harness.preflight import DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL
 from harness.setups import SETUPS
@@ -69,6 +69,9 @@ def parse_args(argv):
                         help="where result records go (default: runs/ in the repo)")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
                         help=f"wall-clock seconds before OpenCode is killed and the run fails (default {DEFAULT_TIMEOUT})")
+    parser.add_argument("--check-timeout", type=int, default=DEFAULT_CHECK_TIMEOUT,
+                        help="seconds before one grading lisp-check is killed and counts as failed "
+                             f"(default {DEFAULT_CHECK_TIMEOUT})")
     parser.add_argument("--max-rounds", type=int, default=DEFAULT_MAX_ROUNDS,
                         help=f"check-fix rounds before OpenCode is killed and the run fails (default {DEFAULT_MAX_ROUNDS})")
     args = parser.parse_args(argv)
@@ -208,7 +211,6 @@ def main(argv):
     transcript = run_folder / "transcript.jsonl"
     spec = (task_dir / "spec.md").read_text()
     message = prompt(spec, setup.prompt_note)
-
     required = task_files(spec)
 
     def turn(run_args):
@@ -222,14 +224,16 @@ def main(argv):
     exit_code, limit_hit = turn([message])
     sid = session_id(transcript)
     continue_sent = False
-    if not limit_hit and sid and not all_files_ok(work, run_folder / "status-check", required):
+    stopped_early = sid and not limit_hit and not all_files_ok(
+        work, run_folder / "status-check", required, args.check_timeout)
+    if stopped_early:
         continue_sent = True
         exit_code, limit_hit = turn(["-s", sid, CONTINUE_MESSAGE])
     duration = time.monotonic() - clock
 
     if sid:
         export_session(opencode, sid, work, env, run_folder / "session.json")
-    grading = grade(work, task_dir / "hidden-tests", run_folder / "grading", required)
+    grading = grade(work, task_dir / "hidden-tests", run_folder / "grading", required, args.check_timeout)
 
     result = {
         "task": args.task,
@@ -238,7 +242,8 @@ def main(argv):
         "model": env["LLM_MODEL"],
         "started_at": started.isoformat(timespec="seconds"),
         "duration_seconds": round(duration, 1),
-        "limits": {"max_rounds": args.max_rounds, "timeout_seconds": args.timeout},
+        "limits": {"max_rounds": args.max_rounds, "timeout_seconds": args.timeout,
+                   "check_timeout_seconds": args.check_timeout},
         "limit_hit": limit_hit,
         "opencode_exit_code": exit_code,
         "continue_sent": continue_sent,

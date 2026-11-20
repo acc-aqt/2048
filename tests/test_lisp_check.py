@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -67,6 +68,25 @@ class FakeDockerTest(unittest.TestCase):
                 self.assertEqual(lines[-1], "FAIL")
                 self.assertTrue(lines[0].startswith("lisp-check: "))
                 self.assertIn("Cannot connect to the Docker daemon", result.stdout)
+
+    def test_timeout_kills_the_container_and_is_a_tool_error(self):
+        kills = self.run_dir / "kills.jsonl"
+        self.env["LISP_CHECK_TIMEOUT"] = "1"
+        start = time.monotonic()
+
+        result = self.run_wrapper("a.lisp", stdout="OK\n", sleep=60, kills=kills)
+
+        self.assertLess(time.monotonic() - start, 30)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "lisp-check: timed out after 1 s\nFAIL\n")
+        args = self.docker_args()
+        name = args[args.index("--name") + 1]
+        (kill,) = [json.loads(line) for line in kills.read_text().splitlines()]
+        self.assertEqual(kill, ["kill", name])
+
+    def test_no_timeout_unless_set(self):
+        result = self.run_wrapper("a.lisp", stdout="OK\n", sleep=2)
+        self.assertEqual(result.stdout, "OK\n")
 
     def test_logs_one_line_per_invocation_in_the_run_folder(self):
         self.run_wrapper("a.lisp", stdout="OK\n", exit=0)
@@ -162,6 +182,18 @@ class FakeNativeLispTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         args = self.alisp_call()["args"]
         self.assertEqual(args[-3:], ["--", "a.lisp", "--test"])
+
+    def test_timeout_kills_lisp_and_is_a_tool_error(self):
+        self.env["LISP_CHECK_TIMEOUT"] = "1"
+        start = time.monotonic()
+
+        result = self.run_wrapper("a.lisp", stdout="OK\n", sleep=60)
+
+        self.assertLess(time.monotonic() - start, 30)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "lisp-check: timed out after 1 s\nFAIL\n")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(self.alisp_call()["pid"], 0)
 
     def test_lisp_gets_no_stdin_so_a_reading_program_cannot_hang(self):
         self.run_wrapper("a.lisp", stdin_text="agent input\n", stdout="OK\n")
@@ -288,6 +320,22 @@ class RealDockerTest(RealAllegroChecks, unittest.TestCase):
             capture_output=True,
             text=True,
         )
+
+    def test_endless_file_times_out_and_leaves_no_container_running(self):
+        self.write("endless.lisp", "(eval-when (:compile-toplevel :load-toplevel :execute) (loop))\n")
+        self.env["LISP_CHECK_TIMEOUT"] = "30"
+        start = time.monotonic()
+
+        result = self.run_wrapper("endless.lisp")
+
+        self.assertLess(time.monotonic() - start, 90)
+        self.assertEqual((result.stdout, result.returncode),
+                         ("lisp-check: timed out after 30 s\nFAIL\n", 2))
+        containers = subprocess.run(
+            ["docker", "ps", "-q", "--filter", f"volume={self.run_dir}"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(containers.stdout, "")
 
     def test_works_through_a_symlink_on_path(self):
         bin_dir = self.run_dir / "bin"
