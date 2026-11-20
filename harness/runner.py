@@ -1,4 +1,4 @@
-"""Run one experiment: a fresh run folder, one unattended OpenCode session, grading, records."""
+"""Run one experiment: a fresh run folder, an unattended OpenCode session within the limits, grading, records."""
 
 import argparse
 import json

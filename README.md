@@ -35,6 +35,7 @@ Each invocation appends one tab-separated line to the log: UTC timestamp, exit c
 | `LISP_CHECK_LOG` | `./.lisp-check.log` | invocation log file |
 | `LISP_CHECK_IMAGE` | `lisp-skills-allegro:latest` | Docker image |
 | `LISP_CHECK_DOCKER` | `docker` | Docker binary |
+| `LISP_CHECK_TIMEOUT` | none | seconds before the check is killed (Docker mode: `docker kill` of its container); it then prints `lisp-check: timed out after N s` and `FAIL` and exits 2. Only grading sets it; the model's own checks have no timeout |
 
 ### `bin/preflight`
 
@@ -49,7 +50,7 @@ Run it before any long run. It checks that `lisp-check` prints OK on a correct f
 
 ### OpenCode
 
-`harness/opencode.json` defines the provider `local` with model `local/qwen3`, taking base URL, API key and model name from the same `LLM_*` variables, with the context limit set to 32768. Set all three variables; an unset one becomes an empty string. Start OpenCode with the environment from `harness.opencode.isolated_env(state_dir)`. That environment moves every OpenCode config, data, state and cache directory into `state_dir`, loads `harness/opencode.json` as the config file, and sets `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`. So no global OpenCode config and no `~/.claude/CLAUDE.md` is used.
+`harness/opencode.json` defines the provider `local` with model `local/qwen3`, taking base URL, API key and model name from the same `LLM_*` variables, with the context limit set to 32768. Set all three variables; an unset one becomes an empty string. Start OpenCode with the environment from `harness.opencode.isolated_env(state_dir)`. That environment moves every OpenCode config, data, state and cache directory into `state_dir`, loads `harness/opencode.json` (or the `config_file` passed in) as the config file, and sets `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`. So no global OpenCode config and no `~/.claude/CLAUDE.md` is used.
 
 The config allows every tool without asking, but denies `task` (subagents), `webfetch`, `websearch`, `question`, `skill` and `external_directory` (anything outside the run folder).
 
@@ -67,18 +68,54 @@ A private reference solution lives in `reference/<task-name>/`. It only validate
 ### `bin/run-task`
 
 ```sh
-bin/run-task TASK SETUP RUN_NUMBER [--run-root DIR] [--records-dir DIR] [--timeout SECONDS]
+bin/run-task TASK SETUP RUN_NUMBER [--run-root DIR] [--records-dir DIR]
+             [--timeout SECONDS] [--max-rounds N] [--check-timeout SECONDS]
 bin/run-task dummy-slide-row without-skills 0
 ```
 
-`SETUP` is `with-skills` or `without-skills` (placeholders for now; issue #5 fills them in). One call:
+### Setups
+
+| Setup | Gets besides the shared prompt |
+|---|---|
+| `with-skills` | the pinned `vendor/lisp-skills/dist/lisp-rules.md` as always-loaded OpenCode `instructions` |
+| `without-skills` | the sentence "Run lisp-check FILE until it prints OK." after the spec |
+
+Nothing else differs. The shared prompt is identical for both: work alone, create the files from the spec's file table directly in the current folder, and check every `.lisp` file with the listed `lisp-check` commands (`--test` for `*tests.lisp`), then the spec. Each run writes its own OpenCode config to `<run folder>/opencode/opencode.json`: a copy of `harness/opencode.json`, plus, for `with-skills` only, `instructions` pointing at a copy of the rules in `<run folder>/opencode/instructions/`. The without-skills run folder never contains the rules.
+
+### Limits and the continue message
+
+| Limit | Default | Flag | On hit |
+|---|---|---|---|
+| check-fix rounds (lines in the round log) | 40 | `--max-rounds` | process group killed, run failed, `limit_hit: "rounds"` |
+| wall clock, both turns together | 7200 s | `--timeout` | process group killed, run failed, `limit_hit: "wall_clock"` |
+| one grading `lisp-check` | 600 s | `--check-timeout` | that file `TIMEOUT` (a hidden test file counts 0 passed), run failed |
+
+Reaching the round limit fails the run even if the model stopped on its own at that round. The runner polls the round log every 0.2 s, so `check_fix_rounds` can end slightly above the limit.
+
+If the first turn ends without hitting a limit, the runner checks every required and every present `.lisp` file in a copy of `work/` (own log, not counted as rounds). If any is missing or not OK, it sends the one fixed message "Continue until every file is created and every .lisp file prints OK in lisp-check." with `opencode run -s <session>`. It never sends a second one.
+
+### Practice run
+
+Run number 0 is the uncounted practice run (`"counted": false`); counted runs are 1 to 5. The limits may change once, after the practice run only; write the change and its reason under "Limit changes" below.
+
+```sh
+export PATH="$PWD/bin:$PATH"
+bin/preflight
+bin/run-task game-2048 with-skills 0
+```
+
+#### Limit changes
+
+None yet.
+
+### What one call does
 
 1. Creates a fresh run folder `<run root>/<task>/<setup>/<run>-<UTC time>/` with `work/` (the model's folder: an empty `git init` repo), `bin/lisp-check`, the OpenCode state directory and the round log, which stays outside `work/`. The run root (default `$RUN_ROOT` or `/tmp/2048-runs`) must be outside the repo and outside `$HOME`.
-2. Runs `opencode run --format json --thinking` once in `work/`, with the fixed prompt and the spec, stdin closed and the isolated environment. After `--timeout` seconds (default 7200) the whole process group is killed.
-3. Exports the session with `opencode export`, then grades: every `.lisp` file in `work/` through `lisp-check` (`--test` for `*tests.lisp`) and the hidden tests with `lisp-check --test`, all in a copy of `work/`. These grading checks don't count as rounds.
+2. Runs `opencode run --format json --thinking` in `work/` with the shared prompt, stdin closed and the isolated environment, enforcing the limits above, and sends the continue message if needed.
+3. Exports the session with `opencode export`, then grades: every required and every present `.lisp` file in `work/` through `lisp-check` (`--test` for `*tests.lisp`) and the hidden tests with `lisp-check --test`, all in a copy of `work/`. These grading checks don't count as rounds.
 4. Writes `runs/<task>/<setup>/<run>/`: `result.json`, `transcript.jsonl` (the JSON event stream), `session.json` (the export), `opencode.stderr.log`, `lisp-check.log` (one line per round), `grading.log` and `src/` (the model's final files). It refuses to overwrite an existing record.
 
-`result.json` holds task, setup, run number, model, start time, duration, `timed_out`, OpenCode exit code, `check_fix_rounds`, `hidden_tests_passed`/`hidden_tests_total`, per-file `lisp-check` status and `passed` (every file OK, every hidden assertion passed, no timeout).
+`result.json` holds task, setup, run number, `counted`, model, start time, duration, `limits`, `limit_hit` (`null`, `"rounds"` or `"wall_clock"`), the last turn's OpenCode exit code, `continue_sent`, `check_fix_rounds`, `hidden_tests_passed`/`hidden_tests_total`, per-file status in `source_files` (`OK`, `FAIL`, `TIMEOUT` or `MISSING`) and `passed` (every file OK, every hidden assertion passed, no limit hit).
 
 The tests drive `bin/run-task` with `tests/fixtures/fake-opencode` (set through `OPENCODE_BIN`), so they never contact a model.
 
