@@ -228,14 +228,18 @@ def main(argv):
     message = prompt(spec, setup.prompt_note)
     required = task_files(spec)
 
-    def turn(run_args):
-        remaining = max(deadline - time.monotonic(), 0)
-        return run_opencode(opencode, run_args, work, env, transcript,
-                            run_folder / "opencode.stderr.log", remaining,
-                            run_folder / "lisp-check.log", args.max_rounds)
+    model_seconds = 0.0
 
-    clock = time.monotonic()
-    deadline = clock + args.timeout
+    def turn(run_args):
+        """One OpenCode turn; the wall-clock limit covers only the time spent in turns."""
+        nonlocal model_seconds
+        start = time.monotonic()
+        outcome = run_opencode(opencode, run_args, work, env, transcript,
+                               run_folder / "opencode.stderr.log", max(args.timeout - model_seconds, 0),
+                               run_folder / "lisp-check.log", args.max_rounds)
+        model_seconds += time.monotonic() - start
+        return outcome
+
     exit_code, limit_hit = turn([message])
     sid = session_id(transcript)
     continue_sent = False
@@ -244,7 +248,6 @@ def main(argv):
     if stopped_early:
         continue_sent = True
         exit_code, limit_hit = turn(["-s", sid, CONTINUE_MESSAGE])
-    duration = time.monotonic() - clock
 
     if sid:
         export_session(opencode, sid, work, env, run_folder / "session.json")
@@ -257,7 +260,7 @@ def main(argv):
         "counted": args.run_number != PRACTICE_RUN,
         "model": env["LLM_MODEL"],
         "started_at": started.isoformat(timespec="seconds"),
-        "duration_seconds": round(duration, 1),
+        "duration_seconds": round(model_seconds, 1),
         "limits": {"max_rounds": args.max_rounds, "timeout_seconds": args.timeout,
                    "check_timeout_seconds": args.check_timeout},
         "limit_hit": limit_hit,

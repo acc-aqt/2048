@@ -289,6 +289,28 @@ class ContinueTest(RunnerTestCase):
         self.assertTrue(self.result()["continue_sent"])
         self.assertFalse(self.result()["passed"])
 
+    def test_continues_when_only_the_asd_is_missing(self):
+        self.env["FAKE_OPENCODE_SCENARIO"] = "no-asd-first"
+
+        self.run_task()
+
+        self.assertEqual(len(self.seen()), 2)
+        self.assertTrue(self.result()["continue_sent"])
+        self.assertTrue(self.result()["passed"])
+
+    def test_the_status_check_between_turns_is_not_charged_to_the_wall_clock_limit(self):
+        # Each lisp-check takes 2 s: the status check (3 files) and the continue turn (3 files)
+        # each take about 6.5 s, more than the 9 s limit together but less than it alone.
+        self.env.update(FAKE_OPENCODE_SCENARIO="no-asd-first", FAKE_DOCKER_SLEEP="2")
+
+        self.run_task("--timeout", "9")
+
+        result = self.result()
+        self.assertTrue(result["continue_sent"])
+        self.assertIsNone(result["limit_hit"])
+        self.assertTrue(result["passed"])
+        self.assertLess(result["duration_seconds"], 10)
+
     def test_continues_when_a_file_does_not_print_ok(self):
         self.env.update(FAKE_DOCKER_STDOUT="FAIL\n", FAKE_DOCKER_EXIT="1")
 

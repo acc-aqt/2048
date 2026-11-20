@@ -8,6 +8,7 @@ FAKE_OPENCODE_SCENARIO changes that:
   endless-checks  run `lisp-check package.lisp` forever
   never-done      write nothing, check nothing, stop
   stop-early      like never-done, but behave normally when continued with `-s`
+  no-asd-first    write every file but the .asd, check nothing, stop; behave normally when continued
 FAKE_OPENCODE_SPECIAL_FILES=1 also leaves a dangling symlink `dangling.lisp` and a FIFO `pipe`.
 `export ID`: prints a small session JSON.
 """
@@ -74,6 +75,11 @@ def run(args):
         emit("text", part={"type": "text", "text": "I stop here."})
         return 0
     solution = os.environ.get("FAKE_OPENCODE_SOLUTION")
+    if solution and scenario == "no-asd-first" and not continued:
+        for source in sorted(Path(solution).glob("*.lisp")):
+            shutil.copy2(source, source.name)
+        emit("text", part={"type": "text", "text": "I stop here."})
+        return 0
     if solution:
         for source in sorted(Path(solution).iterdir()):
             shutil.copy2(source, source.name)

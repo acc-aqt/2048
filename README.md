@@ -89,7 +89,7 @@ Nothing else differs. The shared prompt is identical for both: work alone, creat
 | Limit | Default | Flag | On hit |
 |---|---|---|---|
 | check-fix rounds (lines in the round log) | 40 | `--max-rounds` | process group killed, run failed, `limit_hit: "rounds"` |
-| wall clock, both turns together | 7200 s | `--timeout` | process group killed, run failed, `limit_hit: "wall_clock"` |
+| wall clock, both OpenCode turns together (the status check between them is not counted) | 7200 s | `--timeout` | process group killed, run failed, `limit_hit: "wall_clock"` |
 | one grading `lisp-check` | 120 s | `--check-timeout` | that file `TIMEOUT` (a hidden test file counts 0 passed), run failed |
 
 Reaching the round limit fails the run even if the model stopped on its own at that round. The runner polls the round log every 0.2 s, so `check_fix_rounds` can end slightly above the limit.
@@ -117,7 +117,7 @@ None yet.
 3. Exports the session with `opencode export`, then grades: every required and every present `.lisp` file in `work/` through `lisp-check` (`--test` for `*tests.lisp`) and the hidden tests with `lisp-check --test`, all in a copy of `work/`. These grading checks don't count as rounds.
 4. Writes `runs/<task>/<setup>/<run>/`: `result.json`, `transcript.jsonl` (the JSON event stream), `session.json` (the export), `opencode.stderr.log`, `lisp-check.log` (one line per round), `grading.log` and `src/` (the model's final files: folders and regular files only; symlinks and special files such as FIFOs are skipped and listed in `skipped_files`). It builds the record in a hidden sibling folder and renames it into place at the end, so a record folder either has its `result.json` or doesn't exist. A record counts as existing only when it has `result.json`: run-task refuses to overwrite one, and renames a leftover folder without `result.json` to `<run>.incomplete-<UTC time>` before saving the new record. Grading copies `work/` the same way, so it sees the same files as `src/`.
 
-`result.json` holds task, setup, run number, `counted`, model, start time, duration, `limits`, `limit_hit` (`null`, `"rounds"` or `"wall_clock"`), the last turn's OpenCode exit code, `continue_sent`, `check_fix_rounds`, `hidden_tests_passed`/`hidden_tests_total`, per-file status in `source_files` (`OK`, `FAIL`, `TIMEOUT` for each `.lisp` file, `MISSING` for any absent required file, `.asd` included), `skipped_files` (`{path: "symlink" | "special file"}`) and `passed` (every file OK, every hidden assertion passed, no limit hit).
+`result.json` holds task, setup, run number, `counted`, model, start time, `duration_seconds` (time spent in OpenCode turns, both together: the same time the wall-clock limit counts, so without the status check between turns, the export and grading), `limits`, `limit_hit` (`null`, `"rounds"` or `"wall_clock"`), the last turn's OpenCode exit code, `continue_sent`, `check_fix_rounds`, `hidden_tests_passed`/`hidden_tests_total`, per-file status in `source_files` (`OK`, `FAIL`, `TIMEOUT` for each `.lisp` file, `MISSING` for any absent required file, `.asd` included), `skipped_files` (`{path: "symlink" | "special file"}`) and `passed` (every file OK, every hidden assertion passed, no limit hit).
 
 The tests drive `bin/run-task` with `tests/fixtures/fake-opencode` (set through `OPENCODE_BIN`), so they never contact a model.
 
