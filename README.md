@@ -129,9 +129,9 @@ Target: openSUSE Linux x86_64 with Allegro CL installed natively, Python 3, no D
 | Path | What |
 |---|---|
 | `tasks/game-2048/spec.md` | the task text the model gets, verbatim |
-| `tasks/game-2048/hidden-tests/` | hidden tests, copied into the run folder next to `game-2048.asd` only for grading |
+| `tasks/game-2048/hidden-tests/` | hidden tests, one file per seam: `hidden-slide-row-tests.lisp`, `hidden-move-tests.lisp`, `hidden-spawn-tile-tests.lisp`, `hidden-won-game-over-tests.lisp`, `hidden-play-tests.lisp` (66 assertions) |
 | `reference/game-2048/` | private reference implementation; never copied into a run folder |
 
-Grade a run folder (it must have its own `.git`) with `lisp-check --test game-2048-hidden-tests.lisp`. The hidden tests use only the public interface from the spec and catch errors per assertion, so a failing run prints `N of M assertions failed`. M is the number of lines starting with `(test` in the file. A missing or unexported interface function fails at the compile stage instead, without counts.
+The hidden tests use only the public interface from the spec. They set `util.test:*error-protect-tests*`, so an error inside one assertion fails only that assertion. A compile-time problem, such as an interface function the package does not export, still fails the whole file. Splitting the tests by seam keeps that loss to one file.
 
-`tests/test_game_2048_task.py` (part of the unittest run above) validates the hidden tests: it lays out a run folder from the reference and the hidden tests in a temporary directory, checks that every file prints `OK`, and that the hidden tests fail on a copy with a wrong merge rule.
+`tests/test_game_2048_task.py` grades a copy of the reference with `harness.grade.grade`: every file must print `OK` and all 66 hidden assertions must pass. It also checks that a copy with a double-merge bug fails some hidden tests, and that a copy that does not export `won-p` loses only the `won-p`/`game-over-p` file.

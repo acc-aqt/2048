@@ -1,11 +1,11 @@
 import re
 import shutil
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests.test_lisp_check import LISP_CHECK, docker_image_available
+from harness.grade import count_assertions, grade
+from tests.support import docker_image_available
 
 REPO = Path(__file__).resolve().parent.parent
 TASK = REPO / "tasks" / "game-2048"
@@ -14,56 +14,50 @@ REFERENCE = REPO / "reference" / "game-2048"
 
 INTERFACE = {"slide-row", "move", "spawn-tile", "won-p", "game-over-p", "play"}
 MODEL_FILES = {"game-2048.asd", "package.lisp", "game-2048.lisp", "game-2048-tests.lisp"}
+SEAMS = {
+    "hidden-slide-row-tests.lisp": {"slide-row"},
+    "hidden-move-tests.lisp": {"move"},
+    "hidden-spawn-tile-tests.lisp": {"spawn-tile"},
+    "hidden-won-game-over-tests.lisp": {"won-p", "game-over-p"},
+    "hidden-play-tests.lisp": {"play"},
+}
 
 # A classic 2048 bug: a merged tile merges again in the same move, so
 # [2 2 2 2] left becomes [8 0 0 0] instead of [4 4 0 0].
-BROKEN_MERGE_RULE = (
+DOUBLE_MERGE = (
+    "game-2048.lisp",
     "(push tile merged)",
     "(if (and merged (= tile (first merged)))"
     " (incf (first merged) tile)"
     " (push tile merged))",
 )
+UNEXPORTED_WON_P = ("package.lisp", "           #:won-p\n", "")
 
 
 def hidden_test_files():
     return sorted(HIDDEN_TESTS.glob("*.lisp"))
 
 
-def assertion_count(path):
-    """Number of top-level tester assertions: each starts a line with (test."""
-    return len(re.findall(r"^\(test", path.read_text(), re.MULTILINE))
-
-
-def make_run_folder(parent, source=REFERENCE):
-    """Lay out a folder the way a graded run looks: the project, its own .git, the hidden tests."""
-    run_dir = Path(parent) / "run"
-    shutil.copytree(source, run_dir)
-    (run_dir / ".git").mkdir()
-    for path in hidden_test_files():
-        shutil.copy(path, run_dir / path.name)
-    return run_dir
-
-
-def lisp_check(run_dir, name, test=False):
-    args = [str(LISP_CHECK), *(["--test"] if test else []), name]
-    return subprocess.run(args, cwd=run_dir, capture_output=True, text=True)
+def interface_used(path):
+    code = re.sub(r";.*", "", path.read_text())
+    return code, set(re.findall(r"game-2048:([a-z0-9-]+)", code))
 
 
 class TaskLayoutTest(unittest.TestCase):
+    def test_one_hidden_test_file_per_seam(self):
+        self.assertEqual({path.name for path in hidden_test_files()}, set(SEAMS))
+
     def test_hidden_tests_cannot_collide_with_model_files(self):
         names = {path.name for path in hidden_test_files()}
-        self.assertTrue(names)
         self.assertFalse(names & MODEL_FILES)
         self.assertFalse(names & {path.name for path in REFERENCE.iterdir()})
 
-    def test_hidden_tests_use_only_the_public_interface(self):
+    def test_each_hidden_test_file_uses_only_its_part_of_the_public_interface(self):
         for path in hidden_test_files():
-            code = re.sub(r";.*", "", path.read_text())
             with self.subTest(file=path.name):
+                code, used = interface_used(path)
                 self.assertNotIn("game-2048::", code)
-                used = set(re.findall(r"game-2048:([a-z0-9-]+)", code))
-                self.assertTrue(used)
-                self.assertLessEqual(used, INTERFACE)
+                self.assertEqual(used, SEAMS[path.name])
 
     def test_reference_has_the_layout_the_spec_asks_for(self):
         self.assertEqual({path.name for path in REFERENCE.iterdir()}, MODEL_FILES)
@@ -75,49 +69,47 @@ class TaskLayoutTest(unittest.TestCase):
 
 
 @unittest.skipUnless(docker_image_available(), "lisp-skills-allegro image not available")
-class ReferenceValidationTest(unittest.TestCase):
+class HiddenTestsAgainstReferenceTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.parent = Path(self.tmp.name).resolve()
+        self.root = Path(self.tmp.name).resolve()
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def assert_ok(self, result):
-        self.assertEqual(result.stdout.splitlines()[-1:], ["OK"], result.stdout)
-        self.assertEqual(result.returncode, 0)
+    def grade_copy(self, mutation=None):
+        source = self.root / "source"
+        shutil.copytree(REFERENCE, source)
+        if mutation:
+            name, old, new = mutation
+            path = source / name
+            text = path.read_text()
+            self.assertEqual(text.count(old), 1)
+            path.write_text(text.replace(old, new))
+        return grade(source, HIDDEN_TESTS, self.root / "grading")
 
-    def test_every_reference_file_prints_ok(self):
-        run_dir = make_run_folder(self.parent)
-        for path in sorted(REFERENCE.glob("*.lisp")):
-            with self.subTest(file=path.name):
-                self.assert_ok(
-                    lisp_check(run_dir, path.name, test=path.name.endswith("-tests.lisp"))
-                )
+    def test_reference_passes_every_hidden_test_and_every_file_prints_ok(self):
+        result = self.grade_copy()
+        self.assertEqual(
+            result["source_files"],
+            {"package.lisp": "OK", "game-2048.lisp": "OK", "game-2048-tests.lisp": "OK"},
+            result["log"],
+        )
+        self.assertEqual(result["hidden_tests_total"], 66)
+        self.assertEqual(result["hidden_tests_passed"], 66, result["log"])
+        self.assertTrue(result["passed"])
 
-    def test_hidden_tests_pass_against_the_reference(self):
-        run_dir = make_run_folder(self.parent)
-        for path in hidden_test_files():
-            with self.subTest(file=path.name):
-                self.assert_ok(lisp_check(run_dir, path.name, test=True))
+    def test_wrong_merge_rule_fails_some_hidden_tests(self):
+        result = self.grade_copy(DOUBLE_MERGE)
+        self.assertEqual(result["source_files"]["game-2048.lisp"], "OK")
+        self.assertGreater(result["hidden_tests_passed"], 0)
+        self.assertLess(result["hidden_tests_passed"], result["hidden_tests_total"])
+        self.assertFalse(result["passed"])
 
-    def test_hidden_tests_fail_against_a_wrong_merge_rule(self):
-        broken = self.parent / "broken"
-        shutil.copytree(REFERENCE, broken)
-        source = broken / "game-2048.lisp"
-        text = source.read_text()
-        old, new = BROKEN_MERGE_RULE
-        self.assertIn(old, text)
-        source.write_text(text.replace(old, new))
-        run_dir = make_run_folder(self.parent, source=broken)
-        self.assert_ok(lisp_check(run_dir, "game-2048.lisp"))
-        for path in hidden_test_files():
-            with self.subTest(file=path.name):
-                result = lisp_check(run_dir, path.name, test=True)
-                self.assertEqual(result.returncode, 1, result.stdout)
-                failed = re.search(r"test: (\d+) of (\d+) assertions failed", result.stdout)
-                self.assertIsNotNone(failed, result.stdout)
-                self.assertEqual(int(failed.group(2)), assertion_count(path))
+    def test_unexported_function_loses_only_its_own_file(self):
+        result = self.grade_copy(UNEXPORTED_WON_P)
+        lost = count_assertions(HIDDEN_TESTS / "hidden-won-game-over-tests.lisp")
+        self.assertEqual(result["hidden_tests_passed"], result["hidden_tests_total"] - lost)
 
 
 if __name__ == "__main__":
