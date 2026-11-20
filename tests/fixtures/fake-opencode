@@ -6,6 +6,7 @@ into the current folder, runs lisp-check on each .lisp file and prints JSON even
 FAKE_OPENCODE_SCENARIO changes that:
   hang            hang forever
   endless-checks  run `lisp-check package.lisp` forever
+  check-then-hang start `lisp-check package.lisp`, then hang forever
   never-done      write nothing, check nothing, stop
   stop-early      like never-done, but behave normally when continued with `-s`
   no-asd-first    write every file but the .asd, check nothing, stop; behave normally when continued
@@ -67,6 +68,10 @@ def run(args):
     continued = "-s" in args
     if scenario == "hang":
         emit("step_start", part={"type": "step-start"})
+        time.sleep(3600)
+    if scenario == "check-then-hang":
+        subprocess.Popen(["lisp-check", "package.lisp"], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(3600)
     if scenario == "endless-checks":
         while True:

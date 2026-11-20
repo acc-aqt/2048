@@ -5,11 +5,11 @@ import sys
 import time
 
 if sys.argv[1:2] == ["kill"]:
+    time.sleep(float(os.environ.get("FAKE_DOCKER_KILL_SLEEP", "0")))
     kills_file = os.environ.get("FAKE_DOCKER_KILLS")
     if kills_file:
         with open(kills_file, "a") as f:
             f.write(json.dumps(sys.argv[1:]) + "\n")
-    time.sleep(float(os.environ.get("FAKE_DOCKER_KILL_SLEEP", "0")))
     sys.exit(0)
 
 args_file = os.environ.get("FAKE_DOCKER_ARGS")

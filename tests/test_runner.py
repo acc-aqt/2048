@@ -338,6 +338,17 @@ class LimitTest(RunnerTestCase):
         self.assertFalse(result["continue_sent"])
         self.assertTrue((self.record_dir() / "transcript.jsonl").is_file())
 
+    def test_a_check_running_at_the_limit_gets_its_container_killed(self):
+        kills = Path(self.tmp.name) / "kills.jsonl"
+        self.env.update(FAKE_OPENCODE_SCENARIO="check-then-hang", FAKE_DOCKER_SLEEP="60",
+                        FAKE_DOCKER_KILL_SLEEP="1", FAKE_DOCKER_KILLS=str(kills))
+
+        self.run_task("--timeout", "3", "--check-timeout", "1")
+
+        self.assertEqual(self.result()["limit_hit"], "wall_clock")
+        model_kills = [json.loads(line) for line in kills.read_text().splitlines()]
+        self.assertGreaterEqual(len(model_kills), 2, "the model's check container was not killed")
+
     def test_endless_check_fix_rounds_stop_at_40_rounds(self):
         self.env["FAKE_OPENCODE_SCENARIO"] = "endless-checks"
         start = time.monotonic()

@@ -122,6 +122,31 @@ def kill_group(process, sig):
         pass
 
 
+def group_alive(process):
+    try:
+        os.killpg(process.pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def stop_group(process):
+    """SIGTERM PROCESS's group and give every member, not just PROCESS, KILL_GRACE_SECONDS to exit.
+
+    A lisp-check wrapper in the group uses that time to kill its own check and container.
+    """
+    kill_group(process, signal.SIGTERM)
+    deadline = time.monotonic() + KILL_GRACE_SECONDS
+    try:
+        process.wait(timeout=KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+    while group_alive(process) and time.monotonic() < deadline:
+        time.sleep(POLL_SECONDS)
+    kill_group(process, signal.SIGKILL)
+    process.wait()
+
+
 def wait_within_limits(process, timeout, round_log, max_rounds):
     """Wait for PROCESS; return the limit hit first ("rounds" or "wall_clock"), or None if it exited."""
     deadline = time.monotonic() + timeout
@@ -150,12 +175,7 @@ def run_opencode(opencode, run_args, work, env, transcript, stderr_log, timeout,
         try:
             limit_hit = wait_within_limits(process, timeout, round_log, max_rounds)
             if limit_hit:
-                kill_group(process, signal.SIGTERM)
-                try:
-                    process.wait(timeout=KILL_GRACE_SECONDS)
-                except subprocess.TimeoutExpired:
-                    kill_group(process, signal.SIGKILL)
-                    process.wait()
+                stop_group(process)
             return process.returncode, limit_hit
         finally:
             kill_group(process, signal.SIGKILL)

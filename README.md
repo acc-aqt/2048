@@ -92,7 +92,7 @@ Nothing else differs. The shared prompt is identical for both: work alone, creat
 | wall clock, both OpenCode turns together (the status check between them is not counted) | 7200 s | `--timeout` | process group killed, run failed, `limit_hit: "wall_clock"` |
 | one grading `lisp-check` | 120 s | `--check-timeout` | that file `TIMEOUT` (a hidden test file counts 0 passed), run failed |
 
-Reaching the round limit fails the run even if the model stopped on its own at that round. The runner polls the round log every 0.2 s, so `check_fix_rounds` can end slightly above the limit.
+"Process group killed" means SIGTERM to OpenCode's process group, up to 10 s for every process in it to exit (a running `lisp-check` uses it to kill its check and container), then SIGKILL. Reaching the round limit fails the run even if the model stopped on its own at that round. The runner polls the round log every 0.2 s, so `check_fix_rounds` can end slightly above the limit.
 
 If the first turn ends without hitting a limit, the runner checks that every required file (`.asd` included) exists and every present `.lisp` file prints OK, in a copy of `work/` (own log, not counted as rounds). If any is missing or not OK, it sends the one fixed message "Continue until every file is created and every .lisp file prints OK in lisp-check." with `opencode run -s <session>`. It never sends a second one.
 
