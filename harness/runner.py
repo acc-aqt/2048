@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -11,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness.grade import grade
+from harness.grade import grade, is_test_file
 from harness.opencode import isolated_env, write_run_config
 from harness.preflight import DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL
 from harness.setups import SETUPS
@@ -27,9 +28,31 @@ EXPORT_TIMEOUT = 120
 
 PROMPT = """Implement the task below in the current folder. Work on your own until it is done; nobody will answer questions.
 
+Create these files directly in the current folder, not in a subfolder: {files}. Check every .lisp file with lisp-check until each prints OK: {checks}.
+
 {spec}
 {note}
 """
+SPEC_FILE_ROW = re.compile(r"^\| `([\w.-]+\.(?:asd|lisp))` \|", re.MULTILINE)
+
+
+def task_files(spec):
+    """The files the spec's file table asks for, in table order."""
+    return SPEC_FILE_ROW.findall(spec)
+
+
+def check_command(name):
+    return "lisp-check " + ("--test " if is_test_file(Path(name)) else "") + name
+
+
+def prompt(spec, note):
+    files = task_files(spec)
+    return PROMPT.format(
+        files=", ".join(f"`{name}`" for name in files),
+        checks=", ".join(f"`{check_command(name)}`" for name in files if name.endswith(".lisp")),
+        spec=spec,
+        note=note,
+    )
 
 
 def parse_args(argv):
@@ -159,7 +182,7 @@ def main(argv):
     env = opencode_env(run_folder, setup)
     opencode = os.environ.get("OPENCODE_BIN", "opencode")
     transcript = run_folder / "transcript.jsonl"
-    message = PROMPT.format(spec=(task_dir / "spec.md").read_text(), note=setup.prompt_note)
+    message = prompt((task_dir / "spec.md").read_text(), setup.prompt_note)
 
     clock = time.monotonic()
     exit_code, timed_out = run_opencode(opencode, message, work, env, transcript,

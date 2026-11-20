@@ -138,6 +138,18 @@ class SetupTest(RunnerTestCase):
             if path.is_file() and not path.is_symlink():
                 self.assertNotIn(rules, path.read_text(errors="replace"), path)
 
+    def test_prompt_names_the_files_and_how_to_check_each_lisp_file(self):
+        self.run_task(task="game-2048", setup="with-skills")
+
+        prompt = self.seen()[0]["argv"][-1]
+        for name in ("game-2048.asd", "package.lisp", "game-2048.lisp", "game-2048-tests.lisp"):
+            self.assertIn(f"`{name}`", prompt.split("\n\n")[1])
+        for check in ("lisp-check package.lisp", "lisp-check game-2048.lisp",
+                      "lisp-check --test game-2048-tests.lisp"):
+            self.assertIn(f"`{check}`", prompt)
+        self.assertNotIn("lisp-check game-2048.asd", prompt)
+        self.assertNotIn("lisp-check game-2048-tests.lisp", prompt)
+
     def test_setups_differ_only_in_the_rules_text(self):
         with_skills, without_skills = self.run_both_setups()
 
