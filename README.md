@@ -49,3 +49,15 @@ Run it before any long run. It checks that `lisp-check` prints OK on a correct f
 ### OpenCode
 
 `harness/opencode.json` defines the provider `local` with model `local/qwen3`, taking base URL, API key and model name from the same `LLM_*` variables, with the context limit set to 32768. Set all three variables; an unset one becomes an empty string. Start OpenCode with the environment from `harness.opencode.isolated_env(state_dir)`. That environment moves every OpenCode config, data, state and cache directory into `state_dir`, loads `harness/opencode.json` as the config file, and sets `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`. So no global OpenCode config and no `~/.claude/CLAUDE.md` is used.
+
+## Task and grading
+
+| Path | What |
+|---|---|
+| `tasks/game-2048/spec.md` | the task text the model gets, verbatim |
+| `tasks/game-2048/hidden-tests/` | hidden tests, copied into the run folder next to `game-2048.asd` only for grading |
+| `reference/game-2048/` | private reference implementation; never copied into a run folder |
+
+Grade a run folder (it must have its own `.git`) with `lisp-check --test game-2048-hidden-tests.lisp`. The hidden tests use only the public interface from the spec and catch errors per assertion, so a failing run prints `N of M assertions failed`. M is the number of lines starting with `(test` in the file. A missing or unexported interface function fails at the compile stage instead, without counts.
+
+`tests/test_game_2048_task.py` (part of the unittest run above) validates the hidden tests: it lays out a run folder from the reference and the hidden tests in a temporary directory, checks that every file prints `OK`, and that the hidden tests fail on a copy with a wrong merge rule.
