@@ -50,6 +50,19 @@ def run_docker(args):
     return result.returncode
 
 
+def run_native(args):
+    command = [str(PLUGIN_DIR / "bin" / "lisp-check"), *args]
+    try:
+        result = subprocess.run(
+            command, stdin=subprocess.DEVNULL, capture_output=True, text=True
+        )
+    except OSError as error:
+        return tool_error(f"could not start {command[0]}: {error}")
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+    return result.returncode
+
+
 def log_invocation(args, exit_code):
     log = os.environ.get("LISP_CHECK_LOG") or str(Path.cwd() / ".lisp-check.log")
     stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -62,7 +75,7 @@ def run(args):
     if mode == "docker":
         return run_docker(args)
     if mode == "native":
-        return tool_error("LISP_CHECK_MODE=native is not implemented yet")
+        return run_native(args)
     return tool_error(f"unknown LISP_CHECK_MODE '{mode}' (use docker or native)")
 
 

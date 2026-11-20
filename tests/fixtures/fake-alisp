@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args_file = os.environ.get("FAKE_ALISP_ARGS")
+if args_file:
+    with open(args_file, "w") as f:
+        json.dump({"args": sys.argv[1:], "stdin": sys.stdin.read()}, f)
+sys.stdout.write(os.environ.get("FAKE_ALISP_STDOUT", ""))
+sys.exit(int(os.environ.get("FAKE_ALISP_EXIT", "0")))
