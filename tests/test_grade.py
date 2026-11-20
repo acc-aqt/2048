@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from harness.grade import all_files_ok, grade
+from harness.grade import all_files_ok, count_assertions, grade
 
 REPO = Path(__file__).resolve().parent.parent
 FAKE_DOCKER = REPO / "tests" / "fixtures" / "fake-docker"
@@ -59,6 +59,17 @@ class GradeWithFakeDockerTest(unittest.TestCase):
         self.assertEqual(set(result["source_files"].values()), {"FAIL"})
         self.assertEqual(result["hidden_tests_passed"], 0)
         self.assertFalse(result["passed"])
+
+    def test_a_model_file_named_like_a_hidden_test_does_not_replace_or_block_it(self):
+        (self.project / "slide-row-hidden-tests.lisp").write_text("(in-package :slide-row)\n")
+
+        result = grade(self.project, HIDDEN, self.root / "grading")
+
+        hidden_total = count_assertions(HIDDEN / "slide-row-hidden-tests.lisp")
+        self.assertEqual((result["hidden_tests_passed"], result["hidden_tests_total"]),
+                         (hidden_total, hidden_total))
+        self.assertEqual(result["source_files"]["slide-row-hidden-tests.lisp"], "OK")
+        self.assertEqual((self.project / "slide-row-hidden-tests.lisp").read_text(), "(in-package :slide-row)\n")
 
     def test_a_required_file_that_does_not_exist_is_missing(self):
         (self.project / "slide-row.lisp").unlink()

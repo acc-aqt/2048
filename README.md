@@ -63,7 +63,7 @@ The config allows every tool without asking, but denies `task` (subagents), `web
 A task lives in `tasks/<task-name>/`:
 
 - `spec.md`: the task text. The runner puts it into the prompt.
-- `hidden-tests/*.lisp`: tester files graded after the run, never present during it. They are copied to the same relative path in the root of a grading copy of the model's folder, next to its `.asd`. Write every assertion as one top-level `(test ...)`/`(test-error ...)` form: the grader counts them to get the total. An error while loading a hidden test file (for example a missing function) means 0 passed for that file.
+- `hidden-tests/*.lisp`: tester files graded after the run, never present during it. They are copied to the same relative path under a `hidden-tests/` folder of a grading copy of the model's folder (`hidden-tests-2/` and so on if the model made a `hidden-tests` itself), so no model file can clash with them; `lisp-check` finds the model's `.asd` one folder up. Write every assertion as one top-level `(test ...)`/`(test-error ...)` form: the grader counts them to get the total. An error while loading a hidden test file (for example a missing function) means 0 passed for that file.
 
 A private reference solution lives in `reference/<task-name>/`. It only validates the hidden tests (see `tests/test_dummy_task.py`); the runner never reads it. `tasks/dummy-slide-row` is a tiny task (only `slide-row`) for trying the chain end to end.
 

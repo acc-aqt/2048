@@ -8,6 +8,7 @@ from pathlib import Path
 
 LISP_CHECK = Path(__file__).resolve().parent.parent / "bin" / "lisp-check"
 DEFAULT_CHECK_TIMEOUT = 120
+HIDDEN_TESTS_FOLDER = "hidden-tests"
 TIMED_OUT = re.compile(r"^lisp-check: timed out after ", re.MULTILINE)
 
 ASSERTION = re.compile(r"^\((?:util\.test:)?test(?:-[a-z-]+)?[\s)]", re.MULTILINE)
@@ -60,16 +61,27 @@ def copy_project(project_dir, grading_dir):
     (grading_dir / ".git").mkdir(exist_ok=True)
 
 
+def unused_folder(parent, name):
+    """PARENT/NAME, or PARENT/NAME-2, -3, ... if the model already made that path."""
+    candidate, number = parent / name, 1
+    while candidate.exists() or candidate.is_symlink():
+        number += 1
+        candidate = parent / f"{name}-{number}"
+    return candidate
+
+
 def copy_hidden_tests(hidden_tests_dir, grading_dir):
+    """Copy the hidden tests into a folder of their own in GRADING_DIR, so no model file can clash with them.
+
+    lisp-check still finds the project's .asd: it looks in the test file's folder, then upwards.
+    """
+    target_dir = unused_folder(grading_dir, HIDDEN_TESTS_FOLDER)
     hidden = []
     for source in sorted(hidden_tests_dir.rglob("*.lisp")):
-        relative = source.relative_to(hidden_tests_dir)
-        target = grading_dir / relative
-        if target.exists():
-            raise ValueError(f"hidden test {relative} would overwrite a project file")
+        target = target_dir / source.relative_to(hidden_tests_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
-        hidden.append(relative)
+        hidden.append(target.relative_to(grading_dir))
     return hidden
 
 
