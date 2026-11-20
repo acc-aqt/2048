@@ -59,19 +59,33 @@ def copy_hidden_tests(hidden_tests_dir, grading_dir):
     return hidden
 
 
-def grade(project_dir, hidden_tests_dir, grading_dir):
+def check_project_files(grading_dir, required_files=()):
+    """lisp-check every .lisp file in GRADING_DIR; a required file that doesn't exist is MISSING."""
+    present = {str(p.relative_to(grading_dir)) for p in grading_dir.rglob("*.lisp")}
+    statuses, log = {}, []
+    for name in sorted(present | {name for name in required_files if name.endswith(".lisp")}):
+        if name not in present:
+            statuses[name] = "MISSING"
+            continue
+        output, entry = lisp_check(Path(name), grading_dir, is_test_file(Path(name)))
+        statuses[name] = "OK" if output.splitlines()[-1:] == ["OK"] else "FAIL"
+        log.append(entry)
+    return statuses, log
+
+
+def all_files_ok(project_dir, check_dir, required_files=()):
+    """True if every required and every present .lisp file in PROJECT_DIR prints OK, checked in a copy."""
+    copy_project(Path(project_dir), Path(check_dir))
+    statuses, _ = check_project_files(Path(check_dir), required_files)
+    return bool(statuses) and set(statuses.values()) == {"OK"}
+
+
+def grade(project_dir, hidden_tests_dir, grading_dir, required_files=()):
     """Grade PROJECT_DIR in a fresh GRADING_DIR; PROJECT_DIR itself is never changed."""
     project_dir, hidden_tests_dir, grading_dir = map(Path, (project_dir, hidden_tests_dir, grading_dir))
     copy_project(project_dir, grading_dir)
-    project_files = sorted(p.relative_to(grading_dir) for p in grading_dir.rglob("*.lisp"))
+    source_files, log = check_project_files(grading_dir, required_files)
     hidden_files = copy_hidden_tests(hidden_tests_dir, grading_dir)
-
-    log = []
-    source_files = {}
-    for relative in project_files:
-        output, entry = lisp_check(relative, grading_dir, is_test_file(relative))
-        source_files[str(relative)] = "OK" if output.splitlines()[-1:] == ["OK"] else "FAIL"
-        log.append(entry)
 
     total = passed = 0
     for relative in hidden_files:

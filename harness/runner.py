@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness.grade import grade, is_test_file
+from harness.grade import all_files_ok, grade, is_test_file
 from harness.opencode import isolated_env, write_run_config
 from harness.preflight import DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL
 from harness.setups import SETUPS
@@ -33,7 +33,8 @@ Create these files directly in the current folder, not in a subfolder: {files}. 
 {spec}
 {note}
 """
-SPEC_FILE_ROW = re.compile(r"^\| `([\w.-]+\.(?:asd|lisp))` \|", re.MULTILINE)
+CONTINUE_MESSAGE = "Continue until every file is created and every .lisp file prints OK in lisp-check."
+SPEC_FILE_ROW =re.compile(r"^\| `([\w.-]+\.(?:asd|lisp))` \|", re.MULTILINE)
 
 
 def task_files(spec):
@@ -113,9 +114,9 @@ def kill_group(process, sig):
         pass
 
 
-def run_opencode(opencode, message, work, env, transcript, stderr_log, timeout):
+def run_opencode(opencode, run_args, work, env, transcript, stderr_log, timeout):
     """Run one `opencode run` turn; return (exit code, timed out). Never waits past TIMEOUT."""
-    command = [opencode, "run", "--format", "json", "--thinking", message]
+    command = [opencode, "run", "--format", "json", "--thinking", *run_args]
     with open(transcript, "a") as out, open(stderr_log, "a") as err:
         process = subprocess.Popen(command, cwd=work, env=env, stdin=subprocess.DEVNULL,
                                    stdout=out, stderr=err, start_new_session=True)
@@ -182,17 +183,29 @@ def main(argv):
     env = opencode_env(run_folder, setup)
     opencode = os.environ.get("OPENCODE_BIN", "opencode")
     transcript = run_folder / "transcript.jsonl"
-    message = prompt((task_dir / "spec.md").read_text(), setup.prompt_note)
+    spec = (task_dir / "spec.md").read_text()
+    message = prompt(spec, setup.prompt_note)
+
+    required = task_files(spec)
+
+    def turn(run_args):
+        remaining = max(deadline - time.monotonic(), 0)
+        return run_opencode(opencode, run_args, work, env, transcript,
+                            run_folder / "opencode.stderr.log", remaining)
 
     clock = time.monotonic()
-    exit_code, timed_out = run_opencode(opencode, message, work, env, transcript,
-                                        run_folder / "opencode.stderr.log", args.timeout)
+    deadline = clock + args.timeout
+    exit_code, timed_out = turn([message])
+    sid = session_id(transcript)
+    continue_sent = False
+    if not timed_out and sid and not all_files_ok(work, run_folder / "status-check", required):
+        continue_sent = True
+        exit_code, timed_out = turn(["-s", sid, CONTINUE_MESSAGE])
     duration = time.monotonic() - clock
 
-    sid = session_id(transcript)
     if sid:
         export_session(opencode, sid, work, env, run_folder / "session.json")
-    grading = grade(work, task_dir / "hidden-tests", run_folder / "grading")
+    grading = grade(work, task_dir / "hidden-tests", run_folder / "grading", required)
 
     result = {
         "task": args.task,
@@ -203,6 +216,7 @@ def main(argv):
         "duration_seconds": round(duration, 1),
         "timed_out": timed_out,
         "opencode_exit_code": exit_code,
+        "continue_sent": continue_sent,
         "check_fix_rounds": count_rounds(run_folder / "lisp-check.log"),
         "hidden_tests_passed": grading["hidden_tests_passed"],
         "hidden_tests_total": grading["hidden_tests_total"],

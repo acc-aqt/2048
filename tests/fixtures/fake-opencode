@@ -3,7 +3,11 @@
 
 `run`: appends what it saw to $FAKE_OPENCODE_RECORD, copies $FAKE_OPENCODE_SOLUTION
 into the current folder, runs lisp-check on each .lisp file and prints JSON events.
-FAKE_OPENCODE_SCENARIO=hang makes it hang instead.
+FAKE_OPENCODE_SCENARIO changes that:
+  hang            hang forever
+  endless-checks  run `lisp-check package.lisp` forever
+  never-done      write nothing, check nothing, stop
+  stop-early      like never-done, but behave normally when continued with `-s`
 `export ID`: prints a small session JSON.
 """
 
@@ -55,11 +59,19 @@ def emit(event_type, **data):
     print(json.dumps({**event, **data}), flush=True)
 
 
-def run():
+def run(args):
     record()
-    if os.environ.get("FAKE_OPENCODE_SCENARIO") == "hang":
+    scenario = os.environ.get("FAKE_OPENCODE_SCENARIO", "")
+    continued = "-s" in args
+    if scenario == "hang":
         emit("step_start", part={"type": "step-start"})
         time.sleep(3600)
+    if scenario == "endless-checks":
+        while True:
+            subprocess.run(["lisp-check", "package.lisp"], stdin=subprocess.DEVNULL, capture_output=True)
+    if scenario == "never-done" or (scenario == "stop-early" and not continued):
+        emit("text", part={"type": "text", "text": "I stop here."})
+        return 0
     solution = os.environ.get("FAKE_OPENCODE_SOLUTION")
     if solution:
         for source in sorted(Path(solution).iterdir()):
@@ -83,7 +95,7 @@ def export(session_id):
 
 def main(args):
     if args[:1] == ["run"]:
-        return run()
+        return run(args)
     if args[:1] == ["export"] and len(args) == 2:
         return export(args[1])
     if args == ["--version"]:

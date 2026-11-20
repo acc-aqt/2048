@@ -63,6 +63,7 @@ class RunFolderTest(RunnerTestCase):
     def setUp(self):
         super().setUp()
         self.use_fake_docker_printing_ok()
+        self.env["FAKE_OPENCODE_SOLUTION"] = str(WRONG)
 
     def test_opencode_starts_in_an_empty_git_folder_without_hidden_tests(self):
         result = self.run_task()
@@ -113,6 +114,7 @@ class SetupTest(RunnerTestCase):
     def setUp(self):
         super().setUp()
         self.use_fake_docker_printing_ok()
+        self.env["FAKE_OPENCODE_SOLUTION"] = str(WRONG)
 
     def run_both_setups(self):
         self.run_task(setup="with-skills")
@@ -214,6 +216,52 @@ class RecordTest(RunnerTestCase):
         self.assertIn("already exists", again.stderr)
         self.assertEqual((self.record_dir() / "result.json").read_text(), before)
         self.assertEqual(len(self.seen()), 1)
+
+
+class ContinueTest(RunnerTestCase):
+    def setUp(self):
+        super().setUp()
+        self.use_fake_docker_printing_ok()
+        self.env["FAKE_OPENCODE_SOLUTION"] = str(WRONG)
+
+    def test_no_continue_when_every_file_prints_ok(self):
+        self.run_task()
+
+        self.assertEqual(len(self.seen()), 1)
+        self.assertFalse(self.result()["continue_sent"])
+
+    def test_continues_the_same_session_once_when_the_model_stops_early(self):
+        self.env["FAKE_OPENCODE_SCENARIO"] = "stop-early"
+
+        self.run_task()
+
+        first, second = self.seen()
+        self.assertEqual(second["argv"][:-1],
+                         ["run", "--format", "json", "--thinking", "-s", "ses_fake0001"])
+        self.assertNotEqual(second["argv"][-1], first["argv"][-1])
+        result = self.result()
+        self.assertTrue(result["continue_sent"])
+        self.assertEqual(result["check_fix_rounds"], 3)
+        events = (self.record_dir() / "transcript.jsonl").read_text()
+        self.assertIn("I stop here.", events)
+        self.assertIn("Done.", events)
+
+    def test_continue_is_sent_at_most_once(self):
+        self.env["FAKE_OPENCODE_SCENARIO"] = "never-done"
+
+        self.run_task()
+
+        self.assertEqual(len(self.seen()), 2)
+        self.assertTrue(self.result()["continue_sent"])
+        self.assertFalse(self.result()["passed"])
+
+    def test_continues_when_a_file_does_not_print_ok(self):
+        self.env.update(FAKE_DOCKER_STDOUT="FAIL\n", FAKE_DOCKER_EXIT="1")
+
+        self.run_task()
+
+        self.assertEqual(len(self.seen()), 2)
+        self.assertEqual(self.result()["check_fix_rounds"], 6)
 
 
 class TimeoutTest(RunnerTestCase):
