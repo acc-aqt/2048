@@ -3,6 +3,15 @@
   "autoupdate": false,
   "share": "disabled",
   "model": "local/qwen3",
+  "permission": {
+    "*": "allow",
+    "task": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "question": "deny",
+    "skill": "deny",
+    "external_directory": "deny"
+  },
   "provider": {
     "local": {
       "name": "Local OpenAI-compatible",

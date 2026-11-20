@@ -64,6 +64,14 @@ class ResolvedConfigTest(unittest.TestCase):
         model = config["provider"]["local"]["models"]["qwen3"]
         self.assertEqual(model["limit"]["context"], 32768)
 
+    def test_allows_tools_but_denies_subagents_web_questions_and_outside_folders(self):
+        permission = self.resolved_config(dict(os.environ))["permission"]
+
+        self.assertEqual(permission["*"], "allow")
+        for tool in ("task", "webfetch", "websearch", "question", "skill", "external_directory"):
+            with self.subTest(tool=tool):
+                self.assertEqual(permission[tool], "deny")
+
 
 if __name__ == "__main__":
     unittest.main()
