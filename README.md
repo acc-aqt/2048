@@ -2,7 +2,7 @@
 
 Proof of concept: do the lisp-skills rules and `lisp-check` help a weak model write a working 2048 game in Common Lisp (Allegro CL)? See issue #1.
 
-The experiment runs hosted agents on their weakest models at low effort: Codex CLI and Claude Code. Local Qwen3-8B through OpenCode was dropped after it failed a simple Python smoke test; see [ADR 0001](docs/adr/0001-drop-qwen3-8b-use-weakest-hosted-models.md). Whether the OpenCode path stays is not decided yet.
+The default benchmark on the Mac runs hosted agents on their weakest models at low effort: Claude Code with `haiku` and Codex CLI with `gpt-6-luna`. Local Qwen3-8B was dropped as the Mac benchmark after it failed a simple Python smoke test; see [ADR 0001](docs/adr/0001-drop-qwen3-8b-use-weakest-hosted-models.md). The OpenCode backend stays as an alternate for the openSUSE/LiteLLM work setup.
 
 ## Toolchain
 

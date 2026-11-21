@@ -14,7 +14,7 @@ Before any Lisp run, a hand-driven smoke test asked that model to build a simple
 
 ## Decision
 
-Run the experiment with hosted agents on their weakest available models at low reasoning effort:
+The default Mac benchmark runs hosted agents on their weakest available models at low reasoning effort:
 
 - Codex CLI: model `gpt-6-luna`, `low` reasoning effort, one agent (no multi-agent).
 - Claude Code: model `haiku`, `low` effort, with no user CLAUDE.md, plugins, memory, subagents or web tools (planned, not built yet).
@@ -28,6 +28,6 @@ Each backend writes its own records folder and `RESULTS` file, and the backends 
 ## Consequences
 
 - The question changes from "can an on-prem 8B model do it?" to "do the lisp-skills rules help a weak model write working Lisp?" The result does not by itself prove anything about Qwen3-8B on-prem.
-- Whether the OpenCode/Ollama backend and `bin/preflight`'s model check stay or go is still open.
+- The OpenCode backend and `bin/preflight`'s OpenAI-compatible model check stay as an alternate, because the openSUSE/LiteLLM work setup still needs them. `bin/preflight` gains Claude and Codex login checks.
 - Runs cost API usage and need logged-in Codex and Claude accounts; they no longer run fully offline.
 - Hosted models change over time. Every record stores the model name and effort, so a rerun can tell which model it compared against.
