@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness import codex
+from harness import claude, codex
 from harness.grade import DEFAULT_CHECK_TIMEOUT, all_files_ok, copy_model_files, grade, is_test_file
 from harness.opencode import isolated_env, write_run_config
 from harness.preflight import DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL
@@ -78,9 +78,11 @@ def parse_args(argv):
                         help=f"check-fix rounds before the agent is killed and the run fails (default {DEFAULT_MAX_ROUNDS})")
     parser.add_argument("--backend", choices=sorted(BACKENDS), default="opencode",
                         help="the agent that does the run (default opencode)")
-    parser.add_argument("--model", help=f"codex only: the model (default $CODEX_MODEL or {codex.DEFAULT_MODEL})")
+    parser.add_argument("--model", help="codex and claude: the model (default $CODEX_MODEL or "
+                                         f"{codex.DEFAULT_MODEL}; $CLAUDE_MODEL or {claude.DEFAULT_MODEL})")
     parser.add_argument("--reasoning-effort",
-                        help=f"codex only: the reasoning effort (default $CODEX_REASONING_EFFORT or {codex.DEFAULT_EFFORT})")
+                        help="codex and claude: the reasoning effort (default $CODEX_REASONING_EFFORT or "
+                             f"{codex.DEFAULT_EFFORT}; $CLAUDE_EFFORT or {claude.DEFAULT_EFFORT})")
     args = parser.parse_args(argv)
 
     if not (TASKS / args.task / "spec.md").is_file():
@@ -93,7 +95,7 @@ def parse_args(argv):
             parser.error(f"run root {args.run_root} must be outside {outside}")
     args.records_dir = Path(args.records_dir).resolve()
     if args.backend == "opencode" and (args.model or args.reasoning_effort):
-        parser.error("--model and --reasoning-effort are for --backend codex; OpenCode reads LLM_MODEL")
+        parser.error("--model and --reasoning-effort are for --backend codex or claude; OpenCode reads LLM_MODEL")
     return args
 
 
@@ -204,10 +206,43 @@ class CodexBackend:
                 "codex_exit_code": exit_code, "usage": usage, "total_tokens": total_tokens, "cost_usd": None}
 
 
+class ClaudeBackend:
+    """`claude -p` turns; the continue message resumes the same session with `--resume`."""
+
+    name = "claude"
+    stderr_log = "claude.stderr.log"
+
+    @staticmethod
+    def find_binary():
+        return claude.find_claude()
+
+    def __init__(self, binary, args, run_folder, work, setup):
+        self.binary = binary
+        self.model, self.effort = claude.model_settings(args.model, args.reasoning_effort)
+        self.env = with_lisp_check(claude.isolated_env(os.environ, self.effort), run_folder)
+        self.options = claude.base_options(self.model, self.effort)
+
+    def first_turn(self, message):
+        return [self.binary, *self.options, message]
+
+    def continue_turn(self, sid, message):
+        return [self.binary, *self.options, "--resume", sid, message]
+
+    def session_id(self, transcript):
+        return first_event_value(transcript, "session_id")
+
+    def finish(self, sid):
+        pass
+
+    def result_fields(self, transcript, exit_code):
+        return {"backend": self.name, "model": self.model, "reasoning_effort": self.effort,
+                "claude_exit_code": exit_code}
+
+
 # Every backend has find_binary(), which may raise one of AGENT_NOT_FOUND, and, once built with
 # (binary, args, run_folder, work, setup): env, stderr_log, first_turn(message),
 # continue_turn(sid, message), session_id(transcript), finish(sid) and result_fields(transcript, exit_code).
-BACKENDS = {backend.name: backend for backend in (OpenCodeBackend, CodexBackend)}
+BACKENDS = {backend.name: backend for backend in (OpenCodeBackend, CodexBackend, ClaudeBackend)}
 AGENT_NOT_FOUND = (codex.CodexNotFound,)
 
 
