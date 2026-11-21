@@ -136,6 +136,22 @@ def with_lisp_check(env, run_folder):
     return env
 
 
+LISP_CHECK_PARTS = ("bin", "harness")
+
+
+def confinement(args, run_folder):
+    """(readable, unreadable): paths for an agent's sandboxed shell.
+
+    Unreadable: $HOME, the run root (other runs), the records directories and every repo entry but
+    the lisp-check wrapper's bin/ and harness/. Readable, as narrower exceptions: the repo folder
+    itself (Python lists it to import harness), the run's bin/ and docker's client config.
+    """
+    readable = [REPO, run_folder / "bin", Path.home() / ".docker"]
+    unreadable = [*(path for path in sorted(REPO.iterdir()) if path.name not in LISP_CHECK_PARTS),
+                  DEFAULT_RECORDS, args.records_dir, args.run_root, Path.home()]
+    return readable, list(dict.fromkeys(unreadable))
+
+
 def opencode_env(run_folder, setup):
     state_dir = run_folder / "opencode"
     env = isolated_env(state_dir, config_file=write_run_config(state_dir, setup.rules_file))
@@ -196,7 +212,8 @@ class CodexBackend:
         self.binary = binary
         self.model, self.effort = codex.model_settings(args.model, args.reasoning_effort)
         self.env = with_lisp_check(codex.isolated_env(run_folder / "codex-home", os.environ), run_folder)
-        self.options = codex.exec_options(self.model, self.effort, round_log(run_folder).parent)
+        self.options = codex.exec_options(self.model, self.effort, round_log(run_folder).parent,
+                                          *confinement(args, run_folder))
         if setup.rules_file is not None:
             shutil.copy2(setup.rules_file, work / "AGENTS.md")
 
@@ -226,7 +243,6 @@ class ClaudeBackend:
 
     name = "claude"
     stderr_log = "claude.stderr.log"
-    LISP_CHECK_PARTS = ("bin", "harness")
 
     @staticmethod
     def find_binary():
@@ -237,10 +253,8 @@ class ClaudeBackend:
         self.model, self.effort = claude.model_settings(args.model, args.reasoning_effort)
         self.env = with_lisp_check(claude.isolated_env(os.environ, self.effort), run_folder)
         rounds = round_log(run_folder).parent
-        readable = [REPO, run_folder / "bin", rounds, Path.home() / ".docker"]
-        unreadable = [*(path for path in sorted(REPO.iterdir()) if path.name not in self.LISP_CHECK_PARTS),
-                      DEFAULT_RECORDS, args.records_dir, args.run_root, Path.home()]
-        settings = claude.run_settings(work, rounds, readable, unique(unreadable), codex.docker_socket())
+        readable, unreadable = confinement(args, run_folder)
+        settings = claude.run_settings(work, rounds, [*readable, rounds], unreadable, codex.docker_socket())
         settings_file = claude.write_settings(run_folder / "claude" / "settings.json", settings)
         self.options = claude.base_options(self.model, self.effort, settings_file)
         self.budget = claude.DEFAULT_BUDGET_USD if args.max_budget_usd is None else args.max_budget_usd
@@ -271,10 +285,6 @@ class ClaudeBackend:
         return {"backend": self.name, "model": self.model, "reasoning_effort": self.effort,
                 "budget_usd": self.budget, "claude_exit_code": exit_code, "usage": usage,
                 "total_tokens": sum(usage.values()) if usage else None, "cost_usd": cost}
-
-
-def unique(paths):
-    return list(dict.fromkeys(paths))
 
 
 # Every backend has find_binary(), which may raise one of AGENT_NOT_FOUND, and, once built with

@@ -1,10 +1,11 @@
 import json
 import os
+import re
 import time
 import unittest
 from pathlib import Path
 
-from tests.test_runner import FIXTURES, LISP_RULES, RunnerTestCase, WRONG
+from tests.test_runner import FIXTURES, LISP_RULES, REPO, RunnerTestCase, WRONG
 
 FAKE_CODEX = FIXTURES / "fake-codex"
 THREAD_ID = "019a0000-0000-7000-8000-00000000fake"
@@ -83,6 +84,12 @@ def config_overrides(argv):
     return [argv[i + 1] for i, arg in enumerate(argv) if arg == "-c"]
 
 
+def sandbox_filesystem(argv):
+    """The harness profile's filesystem table, parsed from its inline-TOML -c override."""
+    (table,) = [o.split("=", 1)[1] for o in config_overrides(argv) if o.startswith("permissions.harness.filesystem=")]
+    return dict(re.findall(r'"([^"]+)"="(\w+)"', table))
+
+
 class CodexIsolationTest(CodexTestCase):
     def test_runs_hands_off_in_an_empty_git_folder_in_the_run_root(self):
         self.run_codex()
@@ -115,14 +122,27 @@ class CodexIsolationTest(CodexTestCase):
         self.run_codex()
 
         (seen,) = self.seen()
-        overrides = config_overrides(seen["argv"])
-        self.assertIn('default_permissions="harness"', overrides)
-        (filesystem,) = [o for o in overrides if o.startswith("permissions.harness.filesystem=")]
+        filesystem = sandbox_filesystem(seen["argv"])
         round_log_dir = Path(seen["env"]["LISP_CHECK_LOG"]).parent
-        self.assertEqual(filesystem, 'permissions.harness.filesystem='
-                                     f'{{":root"="read", ":project_roots"="write", "{round_log_dir}"="write"}}')
+        self.assertEqual({path for path, access in filesystem.items() if access == "write"},
+                         {":project_roots", str(round_log_dir)})
+        self.assertEqual(filesystem[":root"], "read")
         self.assertFalse(round_log_dir.is_relative_to(seen["cwd"]))
         self.assertNotEqual(round_log_dir, Path(seen["cwd"]).parent)
+
+    def test_sandbox_hides_hidden_tests_reference_records_and_other_runs(self):
+        self.run_codex()
+
+        (seen,) = self.seen()
+        filesystem = sandbox_filesystem(seen["argv"])
+        for path in (REPO / "tasks", REPO / "reference", REPO / "runs", REPO / ".git", REPO / "tests",
+                     self.records, self.run_root, Path.home()):
+            self.assertEqual(filesystem[str(path)], "none", path)
+        run_folder = Path(seen["cwd"]).parent
+        for path in (REPO, run_folder / "bin", Path.home() / ".docker"):
+            self.assertEqual(filesystem[str(path)], "read", path)
+        for path in (REPO / "bin", REPO / "harness"):
+            self.assertNotIn(str(path), filesystem)
 
     def test_sandbox_lets_lisp_check_reach_the_docker_socket(self):
         socket = Path(self.tmp.name).resolve() / "docker.sock"
