@@ -1,4 +1,4 @@
-"""Run one experiment: a fresh run folder, an unattended OpenCode session within the limits, grading, records."""
+"""Run one experiment: a fresh run folder, an unattended agent session within the limits, grading, records."""
 
 import argparse
 import json
@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from harness import codex
 from harness.grade import DEFAULT_CHECK_TIMEOUT, all_files_ok, copy_model_files, grade, is_test_file
 from harness.opencode import isolated_env, write_run_config
 from harness.preflight import DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL
@@ -75,6 +76,11 @@ def parse_args(argv):
                              f"(default {DEFAULT_CHECK_TIMEOUT})")
     parser.add_argument("--max-rounds", type=int, default=DEFAULT_MAX_ROUNDS,
                         help=f"check-fix rounds before OpenCode is killed and the run fails (default {DEFAULT_MAX_ROUNDS})")
+    parser.add_argument("--backend", choices=sorted(BACKENDS), default="opencode",
+                        help="the agent that does the run (default opencode)")
+    parser.add_argument("--model", help=f"codex only: the model (default $CODEX_MODEL or {codex.DEFAULT_MODEL})")
+    parser.add_argument("--reasoning-effort",
+                        help=f"codex only: the reasoning effort (default $CODEX_REASONING_EFFORT or {codex.DEFAULT_EFFORT})")
     args = parser.parse_args(argv)
 
     if not (TASKS / args.task / "spec.md").is_file():
@@ -86,6 +92,8 @@ def parse_args(argv):
         if args.run_root.is_relative_to(outside):
             parser.error(f"run root {args.run_root} must be outside {outside}")
     args.records_dir = Path(args.records_dir).resolve()
+    if args.backend == "opencode" and (args.model or args.reasoning_effort):
+        parser.error("--model and --reasoning-effort are for --backend codex; OpenCode reads LLM_MODEL")
     return args
 
 
@@ -104,15 +112,81 @@ def prepare_run_folder(run_folder):
     return work
 
 
+def with_lisp_check(env, run_folder):
+    """ENV plus the run's lisp-check wrapper first on PATH and the round log it writes to."""
+    env["PATH"] = f"{run_folder / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+    env["LISP_CHECK_LOG"] = str(run_folder / "lisp-check.log")
+    return env
+
+
 def opencode_env(run_folder, setup):
     state_dir = run_folder / "opencode"
     env = isolated_env(state_dir, config_file=write_run_config(state_dir, setup.rules_file))
     env.setdefault("LLM_BASE_URL", DEFAULT_BASE_URL)
     env.setdefault("LLM_MODEL", DEFAULT_MODEL)
     env.setdefault("LLM_API_KEY", DEFAULT_API_KEY)
-    env["PATH"] = f"{run_folder / 'bin'}{os.pathsep}{env.get('PATH', '')}"
-    env["LISP_CHECK_LOG"] = str(run_folder / "lisp-check.log")
-    return env
+    return with_lisp_check(env, run_folder)
+
+
+class OpenCodeBackend:
+    """`opencode run` turns; the continue message goes to the same session with `-s`."""
+
+    name = "opencode"
+    stderr_log = "opencode.stderr.log"
+
+    def __init__(self, args, run_folder, work, setup):
+        self.binary = os.environ.get("OPENCODE_BIN", "opencode")
+        self.work = work
+        self.run_folder = run_folder
+        self.env = opencode_env(run_folder, setup)
+
+    def first_turn(self, message):
+        return [self.binary, "run", "--format", "json", "--thinking", message]
+
+    def continue_turn(self, sid, message):
+        return [self.binary, "run", "--format", "json", "--thinking", "-s", sid, message]
+
+    def session_id(self, transcript):
+        return first_event_value(transcript, "sessionID")
+
+    def finish(self, sid):
+        if sid:
+            export_session(self.binary, sid, self.work, self.env, self.run_folder / "session.json")
+
+    def result_fields(self, transcript, exit_code):
+        return {"backend": self.name, "model": self.env["LLM_MODEL"], "opencode_exit_code": exit_code,
+                "usage": None, "total_tokens": None, "cost_usd": None}
+
+
+class CodexBackend:
+    """`codex exec` turns; the continue message resumes the same thread with `codex exec resume`."""
+
+    name = "codex"
+    stderr_log = "codex.stderr.log"
+
+    def __init__(self, args, run_folder, work, setup):
+        self.binary = os.environ.get("CODEX_BIN", "codex")
+        self.model, self.effort = codex.model_settings(args.model, args.reasoning_effort)
+        self.env = with_lisp_check(dict(os.environ), run_folder)
+
+    def first_turn(self, message):
+        return [self.binary, "exec", *codex.exec_options(self.model, self.effort), message]
+
+    def continue_turn(self, sid, message):
+        return [self.binary, "exec", "resume", *codex.exec_options(self.model, self.effort), sid, message]
+
+    def session_id(self, transcript):
+        return first_event_value(transcript, "thread_id")
+
+    def finish(self, sid):
+        pass
+
+    def result_fields(self, transcript, exit_code):
+        return {"backend": self.name, "model": self.model, "reasoning_effort": self.effort,
+                "codex_exit_code": exit_code, "usage": None, "total_tokens": None, "cost_usd": None}
+
+
+BACKENDS = {backend.name: backend for backend in (OpenCodeBackend, CodexBackend)}
 
 
 def kill_group(process, sig):
@@ -163,12 +237,11 @@ def wait_within_limits(process, timeout, round_log, max_rounds):
             pass
 
 
-def run_opencode(opencode, run_args, work, env, transcript, stderr_log, timeout, round_log, max_rounds):
-    """Run one `opencode run` turn; return (exit code, limit hit or None).
+def run_turn(command, work, env, transcript, stderr_log, timeout, round_log, max_rounds):
+    """Run one agent turn; return (exit code, limit hit or None).
 
     The whole process group is killed once TIMEOUT seconds pass or ROUND_LOG reaches MAX_ROUNDS lines.
     """
-    command = [opencode, "run", "--format", "json", "--thinking", *run_args]
     with open(transcript, "a") as out, open(stderr_log, "a") as err:
         process = subprocess.Popen(command, cwd=work, env=env, stdin=subprocess.DEVNULL,
                                    stdout=out, stderr=err, start_new_session=True)
@@ -181,15 +254,24 @@ def run_opencode(opencode, run_args, work, env, transcript, stderr_log, timeout,
             kill_group(process, signal.SIGKILL)
 
 
-def session_id(transcript):
+def json_events(transcript):
+    """The JSON objects in TRANSCRIPT, one per line; other lines are skipped."""
+    if not transcript.exists():
+        return []
+    events = []
     for line in transcript.read_text().splitlines():
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(event, dict) and event.get("sessionID"):
-            return event["sessionID"]
-    return None
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def first_event_value(transcript, key):
+    """The first non-empty KEY of a JSON event in TRANSCRIPT, or None."""
+    return next((event[key] for event in json_events(transcript) if event.get(key)), None)
 
 
 def export_session(opencode, sid, work, env, target):
@@ -218,7 +300,7 @@ def save_records(record_dir, run_folder, work, grading, result):
     record_dir.parent.mkdir(parents=True, exist_ok=True)
     partial = record_dir.parent / f".{record_dir.name}.partial-{os.getpid()}"
     partial.mkdir()
-    for name in ("transcript.jsonl", "opencode.stderr.log", "session.json", "lisp-check.log"):
+    for name in ("transcript.jsonl", "opencode.stderr.log", "codex.stderr.log", "session.json", "lisp-check.log"):
         if (run_folder / name).exists():
             shutil.copy2(run_folder / name, partial / name)
     (partial / "grading.log").write_text(grading["log"])
@@ -241,8 +323,7 @@ def main(argv):
     started = utc_now()
     run_folder = args.run_root / args.task / args.setup / f"{args.run_number}-{started:%Y%m%dT%H%M%SZ}"
     work = prepare_run_folder(run_folder)
-    env = opencode_env(run_folder, setup)
-    opencode = os.environ.get("OPENCODE_BIN", "opencode")
+    backend = BACKENDS[args.backend](args, run_folder, work, setup)
     transcript = run_folder / "transcript.jsonl"
     spec = (task_dir / "spec.md").read_text()
     message = prompt(spec, setup.prompt_note)
@@ -250,27 +331,26 @@ def main(argv):
 
     model_seconds = 0.0
 
-    def turn(run_args):
-        """One OpenCode turn; the wall-clock limit covers only the time spent in turns."""
+    def turn(command):
+        """One agent turn; the wall-clock limit covers only the time spent in turns."""
         nonlocal model_seconds
         start = time.monotonic()
-        outcome = run_opencode(opencode, run_args, work, env, transcript,
-                               run_folder / "opencode.stderr.log", max(args.timeout - model_seconds, 0),
-                               run_folder / "lisp-check.log", args.max_rounds)
+        outcome = run_turn(command, work, backend.env, transcript,
+                           run_folder / backend.stderr_log, max(args.timeout - model_seconds, 0),
+                           run_folder / "lisp-check.log", args.max_rounds)
         model_seconds += time.monotonic() - start
         return outcome
 
-    exit_code, limit_hit = turn([message])
-    sid = session_id(transcript)
+    exit_code, limit_hit = turn(backend.first_turn(message))
+    sid = backend.session_id(transcript)
     continue_sent = False
     stopped_early = sid and not limit_hit and not all_files_ok(
         work, run_folder / "status-check", required, args.check_timeout)
     if stopped_early:
         continue_sent = True
-        exit_code, limit_hit = turn(["-s", sid, CONTINUE_MESSAGE])
+        exit_code, limit_hit = turn(backend.continue_turn(sid, CONTINUE_MESSAGE))
 
-    if sid:
-        export_session(opencode, sid, work, env, run_folder / "session.json")
+    backend.finish(sid)
     grading = grade(work, task_dir / "hidden-tests", run_folder / "grading", required, args.check_timeout)
 
     result = {
@@ -278,13 +358,12 @@ def main(argv):
         "setup": args.setup,
         "run_number": args.run_number,
         "counted": args.run_number != PRACTICE_RUN,
-        "model": env["LLM_MODEL"],
+        **backend.result_fields(transcript, exit_code),
         "started_at": started.isoformat(timespec="seconds"),
         "duration_seconds": round(model_seconds, 1),
         "limits": {"max_rounds": args.max_rounds, "timeout_seconds": args.timeout,
                    "check_timeout_seconds": args.check_timeout},
         "limit_hit": limit_hit,
-        "opencode_exit_code": exit_code,
         "continue_sent": continue_sent,
         "check_fix_rounds": count_rounds(run_folder / "lisp-check.log"),
         "hidden_tests_passed": grading["hidden_tests_passed"],
