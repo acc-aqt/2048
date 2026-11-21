@@ -41,6 +41,15 @@ MIXED_BACKENDS_THREAT = """\
 - **Different agent harnesses.** Rows from different backends differ in model, agent harness, tools and token accounting at once. Compare the two setups within one backend first; a difference between backends is not a model-only comparison. Runs get no agent skills or plugins on any backend, and the only extra text a `with-skills` run gets is the rules file, but each agent's built-in system prompt and tools still differ (Claude Code vs the Codex CLI) and can't be removed.
 """
 
+BACKEND_THREATS = {
+    "codex": """\
+- **Codex shell network.** Codex shell commands have open network access: its sandbox enables the network so `lisp-check` can reach Docker, so a run could download code (web search itself is off).
+""",
+    "claude": """\
+- **Claude's sandbox and tool set.** Claude's shell reaches only the Docker socket, no other network. Claude's tool set is limited to `Bash`, `Edit`, `Read` and `Write` (no `Glob`, `Grep` or `TodoWrite`), so it searches and plans through the shell, unlike a default Claude Code session.
+""",
+}
+
 THREATS = """\
 - **Unreviewed v0.1 lisp-skills advice.** The with-skills setup loads `dist/lisp-rules.md` from lisp-skills v0.1, which nobody on the team has reviewed. A difference between the setups says how this version of the text helped or hurt, not how good Lisp advice could be.
 - **5 runs per setup.** Five counted runs per setup is a small sample. A difference of one or two passing runs can be chance.
@@ -193,7 +202,8 @@ def threats(records):
     names = backends(records)
     hosted = HOSTED_THREAT if set(names) - {"opencode"} else ""
     mixed = MIXED_BACKENDS_THREAT if len(names) > 1 else ""
-    return (QUANTISATION_THREAT if "opencode" in names else "") + hosted + mixed + THREATS
+    per_backend = "".join(BACKEND_THREATS.get(name, "") for name in names)
+    return (QUANTISATION_THREAT if "opencode" in names else "") + hosted + mixed + per_backend + THREATS
 
 
 def limits_text(records):
