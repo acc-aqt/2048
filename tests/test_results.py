@@ -39,10 +39,11 @@ class ResultsTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def add_record(self, setup, number, passed=False, hidden=(30, 66), rounds=12, duration=1800.0,
-                   limit_hit=None, continue_sent=False, model="qwen3-8b-32k", task="game-2048"):
+                   limit_hit=None, continue_sent=False, model="qwen3-8b-32k", task="game-2048",
+                   **extra):
         record = self.records / task / setup / str(number)
         (record / "src").mkdir(parents=True)
-        (record / "result.json").write_text(json.dumps({
+        (record / "result.json").write_text(json.dumps(extra | {
             "task": task, "setup": setup, "run_number": number, "counted": number != 0,
             "model": model, "started_at": "2026-11-21T01:00:00+00:00",
             "duration_seconds": duration,
@@ -52,7 +53,7 @@ class ResultsTest(unittest.TestCase):
             "hidden_tests_passed": hidden[0], "hidden_tests_total": hidden[1],
             "source_files": {"game-2048.lisp": "OK" if passed else "FAIL"},
             "passed": passed, "session_id": "ses_x", "run_folder": "/tmp/x",
-        }))
+        } | extra))
 
     def add_full_batch(self, passing=None):
         """Five failing runs per setup; PASSING maps (setup, run) to the rounds of a passing run."""
@@ -199,6 +200,28 @@ class ResultsTest(unittest.TestCase):
 
         self.assertNotIn("## Play the best game", output)
         self.assertNotIn(":play)", output)
+
+    def test_method_describes_a_claude_only_report(self):
+        self.add_record("with-skills", 1, model="haiku", backend="claude", reasoning_effort="low",
+                        budget_usd=5)
+
+        method = section(self.results(), "Method")
+
+        self.assertIn("Claude Code", method)
+        self.assertIn("`haiku`", method)
+        self.assertIn("`low` effort", method)
+        self.assertIn("CLAUDE.md", method)
+        self.assertNotIn("OpenCode", method)
+
+    def test_method_describes_a_codex_only_report(self):
+        self.add_record("with-skills", 1, model="gpt-6-luna", backend="codex", reasoning_effort="low")
+
+        method = section(self.results(), "Method")
+
+        self.assertIn("Codex CLI", method)
+        self.assertIn("`gpt-6-luna`", method)
+        self.assertIn("AGENTS.md", method)
+        self.assertNotIn("OpenCode", method)
 
     def test_counted_runs_are_sorted_by_run_then_setup(self):
         self.add_record("without-skills", 2)

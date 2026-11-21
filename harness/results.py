@@ -17,6 +17,16 @@ RUN_COLUMNS = ["Setup", "Run", "Check-fix rounds", "Hidden tests", "Duration", "
 SUMMARY_COLUMNS = ["Setup", "Counted runs", "Passed", "Median hidden tests", "Median rounds",
                    "Median duration"]
 
+BACKENDS = {
+    "opencode": {"agent": "OpenCode", "driven": "driven by OpenCode with thinking mode on and a 32k context",
+                 "rules": "as always-loaded OpenCode instructions"},
+    "codex": {"agent": "Codex CLI", "driven": "driven by the Codex CLI, isolated from the user's Codex config, plugins and bundled skills",
+              "rules": "as a generated `AGENTS.md` in the model folder"},
+    "claude": {"agent": "Claude Code",
+               "driven": "driven by Claude Code, isolated from the user's `CLAUDE.md`, plugins and memory, with no subagents or web tools",
+               "rules": "as a generated `CLAUDE.md` in the model folder"},
+}
+
 THREATS = """\
 - **Q4_K_M, not FP8.** The local runs used Qwen3-8B quantised to Q4_K_M through Ollama. At work the model is served as FP8 behind LiteLLM. Q4 usually loses some quality, so treat local results as a lower bound for the work setup.
 - **Unreviewed v0.1 lisp-skills advice.** The with-skills setup loads `dist/lisp-rules.md` from lisp-skills v0.1, which nobody on the team has reviewed. A difference between the setups says how this version of the text helped or hurt, not how good Lisp advice could be.
@@ -100,6 +110,30 @@ def joined(values):
     return ", ".join(f"`{value}`" for value in sorted(set(values))) or "unknown"
 
 
+def backend_of(record):
+    return record.get("backend", "opencode")
+
+
+def backends(records):
+    return [name for name in BACKENDS if any(backend_of(r) == name for r in records)] or ["opencode"]
+
+
+def effort_text(runs):
+    efforts = sorted({r["reasoning_effort"] for r in runs if r.get("reasoning_effort")})
+    return f" at {joined(efforts)} effort" if efforts else ""
+
+
+def model_text(records):
+    return "; ".join(
+        f"{joined(r['model'] for r in runs)}{effort_text(runs)}, {BACKENDS[name]['driven']}"
+        for name in backends(records) for runs in [[r for r in records if backend_of(r) == name]])
+
+
+def rules_text(records):
+    return "; ".join(f"{BACKENDS[name]['rules']} ({BACKENDS[name]['agent']})" if len(backends(records)) > 1
+                     else BACKENDS[name]["rules"] for name in backends(records))
+
+
 def limits_text(records):
     distinct = sorted({json.dumps(r["limits"], sort_keys=True) for r in records})
     return "; ".join(
@@ -110,9 +144,9 @@ def limits_text(records):
 
 def method(task, records, commit, location):
     return f"""\
-- **Model:** {joined(r['model'] for r in records)}, driven by OpenCode with thinking mode on and a 32k context.
+- **Model:** {model_text(records)}.
 - **Task:** `tasks/{task}/spec.md`, the same text for every run.
-- **Setups:** `with-skills` gets the lisp-skills rules (`vendor/lisp-skills/dist/lisp-rules.md`, lisp-skills commit `{commit}`) as always-loaded instructions; `without-skills` gets only the sentence "Run lisp-check FILE until it prints OK." Nothing else differs.
+- **Setups:** `with-skills` gets the lisp-skills rules (`vendor/lisp-skills/dist/lisp-rules.md`, lisp-skills commit `{commit}`) {rules_text(records)}; `without-skills` gets only the sentence "Run lisp-check FILE until it prints OK." Nothing else differs.
 - **Runs:** {len(COUNTED_RUNS)} counted runs per setup, run with `bin/run-batch`, alternating which setup goes first. Run {PRACTICE_RUN} was an uncounted practice run. Every run starts in a fresh, empty folder.
 - **Human input:** one fixed prompt, and at most once the fixed message "{CONTINUE_MESSAGE}" if the model stopped before every file printed OK. Nobody edited the model's code.
 - **Limits:** {limits_text(records)}. Hitting a limit fails the run.
