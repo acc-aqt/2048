@@ -39,6 +39,7 @@ def parse_args(argv):
     parser.add_argument("--backend", choices=sorted(BACKENDS), default="opencode", help="passed to every run-task call")
     parser.add_argument("--model", help="passed to every run-task call")
     parser.add_argument("--reasoning-effort", help="passed to every run-task call")
+    parser.add_argument("--max-budget-usd", help="passed to every run-task call")
     args = parser.parse_args(argv)
     if not (TASKS / args.task / "spec.md").is_file():
         parser.error(f"unknown task '{args.task}': no tasks/{args.task}/spec.md")
@@ -51,7 +52,8 @@ def main(argv):
     flags = ["--run-root", args.run_root, "--records-dir", str(records),
              "--timeout", str(args.timeout), "--check-timeout", str(args.check_timeout),
              "--max-rounds", str(args.max_rounds), "--backend", args.backend]
-    for flag, value in (("--model", args.model), ("--reasoning-effort", args.reasoning_effort)):
+    for flag, value in (("--model", args.model), ("--reasoning-effort", args.reasoning_effort),
+                        ("--max-budget-usd", args.max_budget_usd)):
         if value:
             flags += [flag, value]
     failed = []
