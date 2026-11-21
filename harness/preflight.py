@@ -16,6 +16,8 @@ DEFAULT_MODEL = "qwen3-8b-32k"
 DEFAULT_API_KEY = "ollama"
 DEFAULT_TIMEOUT = "300"
 
+BACKENDS = ("claude", "codex", "opencode")
+
 CORRECT_LISP = "(defun add1 (x)\n  (+ x 1))\n"
 BROKEN_LISP = "(defun add1 (x)\n  (+ x 1)\n"
 
@@ -130,6 +132,36 @@ def model_settings():
     )
 
 
+def check_claude_login(claude):
+    """Return None if `claude auth status` reports a login, else a reason. Sends no prompt."""
+    try:
+        result = subprocess.run(
+            [claude, "auth", "status", "--json"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        return f"could not run {claude}: {error}"
+    try:
+        status = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        status = None
+    if isinstance(status, dict) and status.get("loggedIn") is True:
+        return None
+    output = " | ".join((result.stdout + result.stderr).splitlines()) or "no output"
+    return f"`{claude} auth status` does not report a login (exit {result.returncode}): {snippet(output)}"
+
+
+def check_opencode_model(skip_model):
+    if skip_model:
+        print("SKIP model tool call (skipped by --skip-model)")
+        return True
+    settings = model_settings()
+    label = f"model {settings['model']} at {settings['base_url']} answers with a valid tool call"
+    return report(label, check_tool_call(**settings))
+
+
 def report(label, problem):
     if problem is None:
         print(f"PASS {label}")
@@ -145,7 +177,14 @@ def main(args):
     parser.add_argument(
         "--skip-model", action="store_true", help="do not send a request to the model"
     )
+    parser.add_argument(
+        "--backend",
+        action="append",
+        choices=BACKENDS,
+        help="backend to check (repeatable)",
+    )
     options = parser.parse_args(args)
+    backends = options.backend or ["opencode"]
 
     results = []
     with tempfile.TemporaryDirectory(prefix="preflight-") as tmp:
@@ -160,12 +199,12 @@ def main(args):
             check_lisp_file(run_dir, "broken.lisp", BROKEN_LISP, "FAIL"),
         ))
 
-    if options.skip_model:
-        print("SKIP model tool call (skipped by --skip-model)")
-    else:
-        settings = model_settings()
-        label = f"model {settings['model']} at {settings['base_url']} answers with a valid tool call"
-        results.append(report(label, check_tool_call(**settings)))
+    if "claude" in backends:
+        claude = os.environ.get("CLAUDE_BIN", "claude")
+        results.append(report(f"Claude CLI {claude} is logged in", check_claude_login(claude)))
+
+    if "opencode" in backends:
+        results.append(check_opencode_model(options.skip_model))
 
     ok = all(results)
     print("preflight: OK" if ok else "preflight: FAIL")

@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,6 +11,9 @@ from harness.preflight import check_tool_call
 from tests.test_lisp_check import FAKE_DOCKER, docker_image_available
 
 PREFLIGHT = Path(__file__).resolve().parent.parent / "bin" / "preflight"
+FAKE_LOGIN_CLI = Path(__file__).resolve().parent / "fixtures" / "fake-login-cli"
+CLAUDE_LOGGED_IN = '{"loggedIn": true, "authMethod": "claude.ai"}\n'
+CLAUDE_LOGGED_OUT = '{"loggedIn": false, "authMethod": "none"}\n'
 
 
 def tool_call_reply(name="bash", arguments='{"command": "lisp-check hello.lisp"}'):
@@ -146,8 +150,13 @@ class PreflightCommandTest(unittest.TestCase):
         self.env = {
             k: v
             for k, v in os.environ.items()
-            if not k.startswith(("LISP_CHECK_", "LLM_", "FAKE_DOCKER_"))
+            if not k.startswith(("LISP_CHECK_", "LLM_", "FAKE_DOCKER_", "FAKE_CLI_"))
+            and k not in ("CLAUDE_BIN", "CODEX_BIN")
         }
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.args_log = self.tmp / "cli-args.jsonl"
 
     def run_preflight(self, *args):
         return subprocess.run(
@@ -161,6 +170,42 @@ class PreflightCommandTest(unittest.TestCase):
             FAKE_DOCKER_STDERR=stderr,
             FAKE_DOCKER_EXIT=str(exit),
         )
+
+    def use_fake_cli(self, name, stdout="", stderr="", exit=0):
+        self.env.update(
+            {name: str(FAKE_LOGIN_CLI)},
+            FAKE_CLI_ARGS=str(self.args_log),
+            FAKE_CLI_STDOUT=stdout,
+            FAKE_CLI_STDERR=stderr,
+            FAKE_CLI_EXIT=str(exit),
+        )
+
+    def cli_calls(self):
+        if not self.args_log.exists():
+            return []
+        return [json.loads(line)[1:] for line in self.args_log.read_text().splitlines()]
+
+    def test_claude_backend_passes_when_logged_in_without_a_model_call(self):
+        self.use_fake_docker(stdout="OK\n", exit=0)
+        self.use_fake_cli("CLAUDE_BIN", stdout=CLAUDE_LOGGED_IN)
+        result = self.run_preflight("--backend", "claude")
+        self.assertRegex(result.stdout, r"(?m)^PASS .*Claude.*logged in")
+        self.assertEqual(self.cli_calls(), [["auth", "status", "--json"]])
+        self.assertNotIn("tool call", result.stdout)
+
+    def test_claude_backend_fails_when_logged_out(self):
+        self.use_fake_docker(stdout="OK\n", exit=0)
+        self.use_fake_cli("CLAUDE_BIN", stdout=CLAUDE_LOGGED_OUT, exit=1)
+        result = self.run_preflight("--backend", "claude")
+        self.assertEqual(result.returncode, 1)
+        self.assertRegex(result.stdout, r"(?m)^FAIL .*Claude.*\"loggedIn\": false")
+
+    def test_claude_backend_fails_when_the_binary_is_missing(self):
+        self.use_fake_docker(stdout="OK\n", exit=0)
+        self.env["CLAUDE_BIN"] = str(self.tmp / "no-such-claude")
+        result = self.run_preflight("--backend", "claude")
+        self.assertEqual(result.returncode, 1)
+        self.assertRegex(result.stdout, r"(?m)^FAIL .*Claude.*no-such-claude")
 
     def test_docker_failure_is_reported_with_its_reason(self):
         self.use_fake_docker(stderr="Unable to find image 'nope:latest'\n", exit=125)
