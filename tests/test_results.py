@@ -148,6 +148,22 @@ class ResultsTest(unittest.TestCase):
         self.assertIn("dummy-slide-row", error)
         self.assertFalse(self.output.exists())
 
+    def test_overview_states_method_and_threats(self):
+        claude, codex = self.root / "runs" / "claude", self.root / "runs" / "codex"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_backend_batch(codex, "codex", "gpt-6-luna", cost=None)
+
+        output = self.overview(claude, codex)
+
+        method = section(output, "Method")
+        for phrase in ("tasks/game-2048/spec.md", PINNED_LISP_SKILLS, "40 check-fix rounds",
+                       "`CLAUDE.md`", "`AGENTS.md`", "`haiku`", "`gpt-6-luna`"):
+            self.assertIn(phrase, method)
+        threats = section(output, "Threats to validity")
+        for phrase in ("agent harness", "not the model alone", "5 runs per setup"):
+            self.assertIn(phrase, threats)
+        self.assertNotIn("Q4_K_M", threats)
+
     def test_one_table_row_per_counted_run(self):
         self.add_full_batch()
 

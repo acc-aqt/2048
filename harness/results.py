@@ -36,6 +36,10 @@ HOSTED_THREAT = """\
 - **Model plus agent harness.** Each hosted run measures the model together with its agent harness (Claude Code or the Codex CLI), not the model alone. The hosted models also change over time; every record names the model and effort it ran with.
 """
 
+MIXED_BACKENDS_THREAT = """\
+- **Different agent harnesses.** Rows from different backends differ in model, agent harness, tools and token accounting at once. Compare the two setups within one backend first; a difference between backends is not a model-only comparison.
+"""
+
 THREATS = """\
 - **Unreviewed v0.1 lisp-skills advice.** The with-skills setup loads `dist/lisp-rules.md` from lisp-skills v0.1, which nobody on the team has reviewed. A difference between the setups says how this version of the text helped or hurt, not how good Lisp advice could be.
 - **5 runs per setup.** Five counted runs per setup is a small sample. A difference of one or two passing runs can be chance.
@@ -124,11 +128,15 @@ def dollars(value):
     return f"${value:.2f}"
 
 
+def usage_text(field, value):
+    if value is None:
+        return "n/a"
+    return (tokens if field == "total_tokens" else dollars)(value)
+
+
 def median_usage(runs, field):
     values = [r[field] for r in runs if r.get(field) is not None]
-    if not values:
-        return "n/a"
-    return (tokens if field == "total_tokens" else dollars)(statistics.median(values))
+    return usage_text(field, statistics.median(values) if values else None)
 
 
 def summary_row(setup, runs, fields=()):
@@ -165,9 +173,15 @@ def model_text(records):
         for name in backends(records) for runs in [[r for r in records if backend_of(r) == name]])
 
 
+def listing(items):
+    return " and ".join(filter(None, [", ".join(items[:-1]), items[-1]]))
+
+
 def rules_text(records):
-    return "; ".join(f"{BACKENDS[name]['rules']} ({BACKENDS[name]['agent']})" if len(backends(records)) > 1
-                     else BACKENDS[name]["rules"] for name in backends(records))
+    names = backends(records)
+    if len(names) == 1:
+        return BACKENDS[names[0]]["rules"]
+    return listing([f"{BACKENDS[name]['rules']} for {BACKENDS[name]['agent']}" for name in names])
 
 
 def agents_text(records):
@@ -177,7 +191,8 @@ def agents_text(records):
 def threats(records):
     names = backends(records)
     hosted = HOSTED_THREAT if set(names) - {"opencode"} else ""
-    return (QUANTISATION_THREAT if "opencode" in names else "") + hosted + THREATS
+    mixed = MIXED_BACKENDS_THREAT if len(names) > 1 else ""
+    return (QUANTISATION_THREAT if "opencode" in names else "") + hosted + mixed + THREATS
 
 
 def limits_text(records):
@@ -188,7 +203,7 @@ def limits_text(records):
         for limits in map(json.loads, distinct)) or "unknown"
 
 
-def method(task, records, commit, location):
+def method(task, records, commit, locations):
     return f"""\
 - **Model:** {model_text(records)}.
 - **Task:** `tasks/{task}/spec.md`, the same text for every run.
@@ -197,7 +212,7 @@ def method(task, records, commit, location):
 - **Human input:** one fixed prompt, and at most once the fixed message "{CONTINUE_MESSAGE}" if the model stopped before every file printed OK. Nobody edited the model's code.
 - **Limits:** {limits_text(records)}. Hitting a limit fails the run.
 - **Pass:** every `.lisp` file prints OK in `lisp-check` and all hidden tests ({joined(r['hidden_tests_total'] for r in records)} assertions) pass through `lisp-check --test`. The model never saw the hidden tests.
-- **Records:** `{location}/{task}/<setup>/<run>/` holds `result.json`, the transcript, the exported session, the round log, the grading log and `src/`, the model's final files.
+- **Records:** {listing([f"`{location}/{task}/<setup>/<run>/`" for location in locations])} {"holds" if len(locations) == 1 else "hold"} `result.json`, the transcript, the exported session, the round log, the grading log and `src/`, the model's final files.
 """
 
 
@@ -270,7 +285,7 @@ Medians are over the counted runs of each setup. Durations are the time spent in
 
 ## Method
 
-{method(task, records, commit, location)}
+{method(task, records, commit, [location])}
 ## Threats to validity
 
 {threats(records)}
@@ -315,17 +330,13 @@ def overview_row(location, backend, setup, runs):
 PRACTICE_COLUMNS = ["Backend"] + RUN_COLUMNS + ["Tokens", "Cost", "Records"]
 
 
-def usage_cell(record, field):
-    value = record.get(field)
-    return "n/a" if value is None else (tokens if field == "total_tokens" else dollars)(value)
-
-
 def practice_row(location, record):
-    return [backend_of(record), *run_row(record), *(usage_cell(record, field) for field in USAGE_COLUMNS),
+    return [backend_of(record), *run_row(record), *(usage_text(field, record.get(field)) for field in USAGE_COLUMNS),
             location]
 
 
 def render_overview(task, sources, commit):
+    records = [r for _, runs in sources for r in runs]
     groups = list(overview_groups(sources))
     rows = [overview_row(*group) for group in groups]
     practice = [practice_row(location, r) for location, _, _, runs in groups for r in runs if not r["counted"]]
@@ -342,7 +353,13 @@ Each row covers the counted runs (1 to {COUNTED_RUNS[-1]}) of one backend and se
 ## Practice runs (not counted)
 
 {practice_text}
-"""
+
+## Method
+
+{method(task, records, commit, [location for location, _ in sources])}
+## Threats to validity
+
+{threats(records)}"""
 
 
 def mixing_error(task, records_dir, records):
