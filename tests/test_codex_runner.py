@@ -200,7 +200,7 @@ class CodexSetupTest(CodexTestCase):
         for setup in ("with-skills", "without-skills"):
             with self.subTest(setup=setup):
                 self.run_codex(setup=setup, run_number="1")
-                self.run_task(setup=setup, run_number="2")
+                self.run_task("--records-dir", str(self.records / "opencode"), setup=setup, run_number="2")
 
                 codex_prompt = self.seen()[-1]["argv"][-1]
                 opencode_seen = [json.loads(line) for line in

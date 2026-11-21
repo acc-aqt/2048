@@ -149,7 +149,7 @@ If the first turn ends without hitting a limit, the runner checks that every req
 
 Run number 0 is the uncounted practice run (`"counted": false`); counted runs are 1 to 5. The limits may change once, after the practice runs only; write the change and its reason under "Limit changes" below.
 
-Give each backend its own records directory (`runs/claude`, `runs/codex`). A record is keyed by task, setup and run number only, so a second backend writing into the same directory would be refused by run-task or skipped by run-batch.
+Give each backend its own records directory (`runs/claude`, `runs/codex`). A record is keyed by task, setup and run number only, so run-task (and run-batch, before its first run) refuses with exit 1 when the records directory already holds records for the task from another backend; a record without a `backend` field counts as OpenCode's.
 
 `bin/preflight --backend B` (repeatable) checks `lisp-check`, then only the named backends: Claude with `claude auth status --json` and Codex with `codex login status`, neither sending a prompt, OpenCode with the model tool call described under "`bin/preflight`". Without `--backend` it checks every backend whose CLI is installed, so on a Mac with OpenCode installed a bare `bin/preflight` also runs the Ollama check. On the Mac pass `--backend claude --backend codex`.
 

@@ -215,7 +215,7 @@ class ClaudeSetupTest(ClaudeTestCase):
         for setup in ("with-skills", "without-skills"):
             with self.subTest(setup=setup):
                 self.run_claude(setup=setup, run_number="1")
-                self.run_task(setup=setup, run_number="2")
+                self.run_task("--records-dir", str(self.records / "opencode"), setup=setup, run_number="2")
 
                 claude_prompt = self.seen()[-1]["argv"][-1]
                 opencode_seen = [json.loads(line) for line in
@@ -419,9 +419,12 @@ class LeakFlagTest(ClaudeTestCase):
                         FAKE_CODEX_SOLUTION=str(WRONG))
         for number, backend in enumerate(("claude", "codex", "opencode"), start=1):
             with self.subTest(backend=backend):
-                self.run_task("--backend", backend, run_number=str(number))
+                records = self.records / backend
+                self.run_task("--backend", backend, "--records-dir", str(records), run_number=str(number))
 
-                self.assertIs(self.result(run_number=str(number))["suspected_leak"], False)
+                result_file = records / "dummy-slide-row" / "without-skills" / str(number) / "result.json"
+                result = json.loads(result_file.read_text())
+                self.assertIs(result["suspected_leak"], False)
 
     def test_the_repo_path_in_the_runs_own_settings_and_arguments_is_not_a_leak(self):
         self.run_claude()

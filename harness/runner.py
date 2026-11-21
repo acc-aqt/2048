@@ -412,6 +412,28 @@ def has_record(record_dir):
     return (record_dir / "result.json").is_file()
 
 
+def record_backend(result_file):
+    """The backend that wrote RESULT_FILE; records from before the backend field are OpenCode's."""
+    try:
+        result = json.loads(result_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        result = {}
+    return (result.get("backend") if isinstance(result, dict) else None) or OpenCodeBackend.name
+
+
+def other_backend_problem(records_dir, task, backend):
+    """A reason to refuse BACKEND writing TASK's records into RECORDS_DIR, or None.
+
+    A record is keyed by task, setup and run number only, so one backend's records must not mix with another's.
+    """
+    task_records = records_dir / task
+    others = sorted({record_backend(path) for path in task_records.glob("*/*/result.json")} - {backend})
+    if not others:
+        return None
+    return (f"{task_records} already holds records from backend {', '.join(others)}, not {backend}; "
+            "give each backend its own --records-dir")
+
+
 def save_records(record_dir, run_folder, work, grading, result):
     """Build the record in a hidden sibling folder, then rename it to RECORD_DIR, so a record is complete or absent.
 
@@ -438,6 +460,10 @@ def main(argv):
     task_dir = TASKS / args.task
     setup = SETUPS[args.setup]
     record_dir = args.records_dir / args.task / args.setup / str(args.run_number)
+    problem = other_backend_problem(args.records_dir, args.task, args.backend)
+    if problem:
+        print(f"run-task: {problem}", file=sys.stderr)
+        return 1
     if has_record(record_dir):
         print(f"run-task: record {record_dir} already exists; not overwriting it", file=sys.stderr)
         return 1

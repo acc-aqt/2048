@@ -252,6 +252,51 @@ class RecordTest(RunnerTestCase):
         self.assertEqual(len(self.seen()), 1)
 
 
+class RecordsBackendGuardTest(RunnerTestCase):
+    def setUp(self):
+        super().setUp()
+        self.use_fake_docker_printing_ok()
+        self.env.update(FAKE_OPENCODE_SOLUTION=str(WRONG), CODEX_BIN=str(FIXTURES / "fake-codex"),
+                        FAKE_CODEX_SOLUTION=str(WRONG), DOCKER_HOST="unix:///nonexistent/docker.sock")
+
+    def make_record(self, result, setup="with-skills", run_number="1"):
+        record = self.record_dir(setup=setup, run_number=run_number)
+        record.mkdir(parents=True)
+        (record / "result.json").write_text(json.dumps(result) + "\n")
+
+    def test_refuses_a_records_dir_holding_another_backends_records_for_the_task(self):
+        self.make_record({"backend": "claude"})
+
+        completed = self.run_task()
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("claude", completed.stderr)
+        self.assertIn("--records-dir", completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
+        self.assertFalse(self.seen_file.exists())
+        self.assertFalse(self.run_root.exists())
+
+    def test_records_without_a_backend_field_count_as_opencode(self):
+        self.make_record({})
+
+        refused = self.run_task("--backend", "codex")
+        allowed = self.run_task()
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("opencode", refused.stderr)
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+    def test_records_of_the_same_backend_or_another_task_are_fine(self):
+        self.make_record({"backend": "codex"})
+        other_task = self.records / "game-2048" / "with-skills" / "1"
+        other_task.mkdir(parents=True)
+        (other_task / "result.json").write_text(json.dumps({"backend": "claude"}) + "\n")
+
+        completed = self.run_task("--backend", "codex")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
 class ContinueTest(RunnerTestCase):
     def setUp(self):
         super().setUp()

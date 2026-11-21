@@ -124,6 +124,20 @@ class BatchTest(unittest.TestCase):
         self.assertIn("unknown task", completed.stderr)
         self.assertEqual(self.runs_started(), [])
 
+    def test_refuses_up_front_when_the_records_dir_holds_another_backends_records(self):
+        record = self.records / TASK / "with-skills" / "1"
+        record.mkdir(parents=True)
+        (record / "result.json").write_text(json.dumps({"backend": "codex"}) + "\n")
+
+        completed = self.run_batch()
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("codex", completed.stderr)
+        self.assertIn("--records-dir", completed.stderr)
+        self.assertEqual(completed.stderr.count("run-batch:"), 1)
+        self.assertNotIn("run-task", completed.stdout + completed.stderr)
+        self.assertEqual(self.runs_started(), [])
+
     def test_never_runs_the_practice_run(self):
         self.run_batch()
 
