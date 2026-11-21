@@ -48,8 +48,12 @@ def parse_args(argv):
     parser.add_argument("task", help="folder name under tasks/")
     parser.add_argument("--records-dir", default=str(DEFAULT_RECORDS),
                         help="where result records are (default: runs/ in the repo)")
-    parser.add_argument("--output", default=str(REPO / "RESULTS.md"), help="default: RESULTS.md in the repo")
+    parser.add_argument("--overview", nargs="+", metavar="RECORDS_DIR",
+                        help="write one overview table from several records directories instead")
+    parser.add_argument("--output", help="default: RESULTS.md, or RESULTS-overview.md with --overview, in the repo")
     args = parser.parse_args(argv)
+    if args.output is None:
+        args.output = str(REPO / ("RESULTS-overview.md" if args.overview else "RESULTS.md"))
     if not (TASKS / args.task / "spec.md").is_file():
         parser.error(f"unknown task '{args.task}': no tasks/{args.task}/spec.md")
     return args
@@ -282,8 +286,56 @@ Any record folder works. Set `LISP_CHECK_MODE=native` to use an installed Allegr
 {play}"""
 
 
+OVERVIEW_COLUMNS = ["Backend", "Model", "Effort", "Setup", "Counted runs", "Passed", "Median hidden tests",
+                    "Median rounds", "Median duration", "Median tokens", "Median cost", "Records"]
+
+
+def plain(values):
+    return ", ".join(sorted({value for value in values if value})) or "-"
+
+
+def overview_groups(sources):
+    """(location, backend, setup, records) per records directory, backend and setup that has records."""
+    for location, records in sources:
+        for name in backends(records):
+            for setup in sorted(SETUPS):
+                runs = [r for r in records if backend_of(r) == name and r["setup"] == setup]
+                if runs:
+                    yield location, name, setup, runs
+
+
+def overview_row(location, backend, setup, runs):
+    counted = [r for r in runs if r["counted"]]
+    summary = summary_row(setup, counted, list(USAGE_COLUMNS))[1:]
+    return [backend, plain(r["model"] for r in runs), plain(r.get("reasoning_effort") for r in runs), setup,
+            *summary, location]
+
+
+def render_overview(task, sources, commit):
+    groups = list(overview_groups(sources))
+    rows = [overview_row(*group) for group in groups]
+    return f"""\
+# Results overview: {task}
+
+## Overview
+
+{table(OVERVIEW_COLUMNS, rows)}
+"""
+
+
+def overview(args):
+    sources = [(records_location(records_dir, args.output), load_records(records_dir, args.task))
+               for records_dir in args.overview]
+    Path(args.output).write_text(render_overview(args.task, sources, lisp_skills_commit()))
+    count = sum(len(records) for _, records in sources)
+    print(f"results: wrote {args.output} from {count} records in {len(sources)} records directories")
+    return 0
+
+
 def main(argv):
     args = parse_args(argv)
+    if args.overview:
+        return overview(args)
     records = load_records(args.records_dir, args.task)
     location = records_location(args.records_dir, args.output)
     Path(args.output).write_text(render(args.task, records, lisp_skills_commit(), location))

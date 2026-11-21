@@ -40,8 +40,8 @@ class ResultsTest(unittest.TestCase):
 
     def add_record(self, setup, number, passed=False, hidden=(30, 66), rounds=12, duration=1800.0,
                    limit_hit=None, continue_sent=False, model="qwen3-8b-32k", task="game-2048",
-                   **extra):
-        record = self.records / task / setup / str(number)
+                   records=None, **extra):
+        record = (records or self.records) / task / setup / str(number)
         (record / "src").mkdir(parents=True)
         (record / "result.json").write_text(json.dumps(extra | {
             "task": task, "setup": setup, "run_number": number, "counted": number != 0,
@@ -77,6 +77,39 @@ class ResultsTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return self.output.read_text()
+
+    def overview(self, *records_dirs, task="game-2048", expect_exit=0):
+        completed = subprocess.run(
+            [str(RESULTS), task, "--overview", *map(str, records_dirs), "--output", str(self.output)],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(completed.returncode, expect_exit, completed.stderr)
+        return self.output.read_text() if expect_exit == 0 else completed.stderr
+
+    def add_backend_batch(self, records, backend, model, cost):
+        """Runs 1-3 per setup for BACKEND under RECORDS; with-skills passes, tokens and cost grow by run."""
+        for number in (1, 2, 3):
+            for setup in ("with-skills", "without-skills"):
+                passed = setup == "with-skills"
+                self.add_record(setup, number, records=records, model=model, backend=backend,
+                                reasoning_effort="low", passed=passed, hidden=(66 if passed else 10 * number, 66),
+                                rounds=number * 2, duration=60.0 * number, total_tokens=1000 * number,
+                                cost_usd=cost * number if cost is not None else None)
+
+    def test_overview_has_one_row_per_backend_and_setup(self):
+        claude, codex = self.root / "runs" / "claude", self.root / "runs" / "codex"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_backend_batch(codex, "codex", "gpt-6-luna", cost=None)
+
+        markdown = section(self.overview(claude, codex), "Overview")
+
+        self.assertEqual(table_row(markdown, "claude", "haiku", "low", "with-skills"),
+                         ["claude", "haiku", "low", "with-skills", "3", "3/3", "66/66", "4", "2 min",
+                          "2,000", "$1.00", "runs/claude"])
+        self.assertEqual(table_row(markdown, "claude", "haiku", "low", "without-skills")[5:7], ["0/3", "20/66"])
+        self.assertEqual(table_row(markdown, "codex", "gpt-6-luna", "low", "with-skills")[9:],
+                         ["2,000", "n/a", "runs/codex"])
+        self.assertEqual(table_row(markdown, "codex", "gpt-6-luna", "low", "without-skills")[5], "0/3")
 
     def test_one_table_row_per_counted_run(self):
         self.add_full_batch()
