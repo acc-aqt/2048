@@ -37,6 +37,7 @@ Create these files directly in the current folder, not in a subfolder: {files}. 
 {spec}
 {note}
 """
+LEAK_MARKERS = (str(REPO), "hidden-tests", "reference/")
 CONTINUE_MESSAGE = "Continue until every file is created and every .lisp file prints OK in lisp-check."
 SPEC_FILE_ROW =re.compile(r"^\| `([\w.-]+\.(?:asd|lisp))` \|", re.MULTILINE)
 
@@ -378,6 +379,12 @@ def export_session(opencode, sid, work, env, target):
             pass
 
 
+def suspected_leak(transcript):
+    """Whether TRANSCRIPT names the repo, the hidden tests or the reference solution; flagged for review, not failed."""
+    text = transcript.read_text(errors="replace") if transcript.exists() else ""
+    return any(marker in text for marker in LEAK_MARKERS)
+
+
 def count_rounds(log):
     return len(log.read_text().splitlines()) if log.exists() else 0
 
@@ -474,6 +481,7 @@ def main(argv):
         "source_files": grading["source_files"],
         "skipped_files": grading["skipped_files"],
         "passed": grading["passed"] and not limit_hit,
+        "suspected_leak": suspected_leak(transcript),
         "session_id": sid,
         "run_folder": str(run_folder),
     }

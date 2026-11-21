@@ -370,5 +370,29 @@ class ClaudeRecordTest(ClaudeTestCase):
         self.assertIsNone(result["cost_usd"])
 
 
+class LeakFlagTest(ClaudeTestCase):
+    def test_transcript_naming_the_repo_hidden_tests_or_reference_is_flagged_but_not_failed(self):
+        for number, output in enumerate((f"cat: {REPO}/README.md: Operation not permitted",
+                                         "ls: tasks/dummy-slide-row/hidden-tests: No such file",
+                                         "cat: ../reference/slide-row.lisp: No such file"), start=1):
+            with self.subTest(output=output):
+                self.env["FAKE_CLAUDE_TOOL_OUTPUT"] = output
+
+                self.run_claude(run_number=str(number))
+
+                result = self.result(run_number=str(number))
+                self.assertIs(result["suspected_leak"], True)
+                self.assertEqual(result["limit_hit"], None)
+
+    def test_clean_runs_of_every_backend_are_not_flagged(self):
+        self.env.update(FAKE_OPENCODE_SOLUTION=str(WRONG), CODEX_BIN=str(FIXTURES / "fake-codex"),
+                        FAKE_CODEX_SOLUTION=str(WRONG))
+        for number, backend in enumerate(("claude", "codex", "opencode"), start=1):
+            with self.subTest(backend=backend):
+                self.run_task("--backend", backend, run_number=str(number))
+
+                self.assertIs(self.result(run_number=str(number))["suspected_leak"], False)
+
+
 if __name__ == "__main__":
     unittest.main()

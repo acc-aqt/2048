@@ -11,7 +11,7 @@ event that carries usage and cost. FAKE_CLAUDE_SCENARIO changes that:
   stop-early      like never-done, but behave normally when resumed
   crash           print the init event, then exit 1 before any result
   budget          stop with the budget-exceeded result and exit 1, write nothing
-  leak            mention a hidden-tests path in a tool result, otherwise behave normally
+FAKE_CLAUDE_TOOL_OUTPUT, if set, is printed as one more tool result before the files are written.
 """
 
 import json
@@ -146,8 +146,8 @@ def main(args):
         assistant_text("I stop here.")
         result(turn)
         return 0
-    if scenario == "leak":
-        tool_result("cat: /somewhere/tasks/dummy-slide-row/hidden-tests/x.lisp: Operation not permitted")
+    if os.environ.get("FAKE_CLAUDE_TOOL_OUTPUT"):
+        tool_result(os.environ["FAKE_CLAUDE_TOOL_OUTPUT"])
     solution = os.environ.get("FAKE_CLAUDE_SOLUTION")
     if solution:
         for source in sorted(Path(solution).iterdir()):
