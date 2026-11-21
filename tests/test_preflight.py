@@ -207,6 +207,33 @@ class PreflightCommandTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertRegex(result.stdout, r"(?m)^FAIL .*Claude.*no-such-claude")
 
+    def test_codex_backend_passes_when_logged_in_without_a_model_call(self):
+        self.use_fake_docker(stdout="OK\n", exit=0)
+        self.use_fake_cli("CODEX_BIN", stdout="Logged in using ChatGPT\n")
+        result = self.run_preflight("--backend", "codex")
+        self.assertRegex(result.stdout, r"(?m)^PASS .*Codex.*logged in")
+        self.assertEqual(self.cli_calls(), [["login", "status"]])
+        self.assertNotIn("tool call", result.stdout)
+
+    def test_codex_backend_fails_when_logged_out(self):
+        self.use_fake_docker(stdout="OK\n", exit=0)
+        self.use_fake_cli("CODEX_BIN", stderr="Not logged in\n", exit=1)
+        result = self.run_preflight("--backend", "codex")
+        self.assertEqual(result.returncode, 1)
+        self.assertRegex(result.stdout, r"(?m)^FAIL .*Codex.*Not logged in")
+
+    def test_codex_backend_finds_codex_on_path_without_codex_bin(self):
+        self.use_fake_docker(stdout="OK\n", exit=0)
+        self.use_fake_cli("CODEX_BIN", stdout="Logged in using ChatGPT\n")
+        del self.env["CODEX_BIN"]
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "codex").symlink_to(FAKE_LOGIN_CLI)
+        self.env["PATH"] = f"{bin_dir}{os.pathsep}{self.env['PATH']}"
+        result = self.run_preflight("--backend", "codex")
+        self.assertRegex(result.stdout, rf"(?m)^PASS .*Codex.*{bin_dir / 'codex'}")
+        self.assertEqual(self.cli_calls(), [["login", "status"]])
+
     def test_docker_failure_is_reported_with_its_reason(self):
         self.use_fake_docker(stderr="Unable to find image 'nope:latest'\n", exit=125)
         result = self.run_preflight("--skip-model")

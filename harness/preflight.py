@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import urllib.error
@@ -17,6 +18,13 @@ DEFAULT_API_KEY = "ollama"
 DEFAULT_TIMEOUT = "300"
 
 BACKENDS = ("claude", "codex", "opencode")
+CHATGPT_BUNDLED_CODEX = (
+    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+)
+CODEX_NOT_FOUND = (
+    "no Codex CLI found: not on PATH and not bundled in ChatGPT.app; "
+    "set CODEX_BIN to the codex binary"
+)
 
 CORRECT_LISP = "(defun add1 (x)\n  (+ x 1))\n"
 BROKEN_LISP = "(defun add1 (x)\n  (+ x 1)\n"
@@ -132,25 +140,61 @@ def model_settings():
     )
 
 
-def check_claude_login(claude):
-    """Return None if `claude auth status` reports a login, else a reason. Sends no prompt."""
+def run_status_command(command):
+    """Run a login status command; return (result, None) or (None, reason)."""
     try:
         result = subprocess.run(
-            [claude, "auth", "status", "--json"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
+            command, stdin=subprocess.DEVNULL, capture_output=True, text=True
         )
     except OSError as error:
-        return f"could not run {claude}: {error}"
+        return None, f"could not run {command[0]}: {error}"
+    return result, None
+
+
+def no_login_reason(command, result):
+    output = " | ".join((result.stdout + result.stderr).splitlines()) or "no output"
+    return (
+        f"`{' '.join(command)}` does not report a login "
+        f"(exit {result.returncode}): {snippet(output)}"
+    )
+
+
+def check_claude_login(claude):
+    """Return None if `claude auth status` reports a login, else a reason. Sends no prompt."""
+    command = [claude, "auth", "status", "--json"]
+    result, problem = run_status_command(command)
+    if problem:
+        return problem
     try:
         status = json.loads(result.stdout)
     except json.JSONDecodeError:
         status = None
     if isinstance(status, dict) and status.get("loggedIn") is True:
         return None
-    output = " | ".join((result.stdout + result.stderr).splitlines()) or "no output"
-    return f"`{claude} auth status` does not report a login (exit {result.returncode}): {snippet(output)}"
+    return no_login_reason(command, result)
+
+
+def find_codex():
+    """CODEX_BIN, then `codex` on PATH, then the CLI bundled in ChatGPT.app; None if none."""
+    if "CODEX_BIN" in os.environ:
+        return os.environ["CODEX_BIN"]
+    on_path = shutil.which("codex")
+    if on_path:
+        return on_path
+    if os.access(CHATGPT_BUNDLED_CODEX, os.X_OK):
+        return CHATGPT_BUNDLED_CODEX
+    return None
+
+
+def check_codex_login(codex):
+    """Return None if `codex login status` succeeds, else a reason. Sends no prompt."""
+    command = [codex, "login", "status"]
+    result, problem = run_status_command(command)
+    if problem:
+        return problem
+    if result.returncode == 0:
+        return None
+    return no_login_reason(command, result)
 
 
 def check_opencode_model(skip_model):
@@ -202,6 +246,13 @@ def main(args):
     if "claude" in backends:
         claude = os.environ.get("CLAUDE_BIN", "claude")
         results.append(report(f"Claude CLI {claude} is logged in", check_claude_login(claude)))
+
+    if "codex" in backends:
+        codex = find_codex()
+        if codex is None:
+            results.append(report("Codex CLI is logged in", CODEX_NOT_FOUND))
+        else:
+            results.append(report(f"Codex CLI {codex} is logged in", check_codex_login(codex)))
 
     if "opencode" in backends:
         results.append(check_opencode_model(options.skip_model))
