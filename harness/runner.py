@@ -266,8 +266,10 @@ class ClaudeBackend:
         pass
 
     def result_fields(self, transcript, exit_code):
+        usage, cost = claude.usage(json_events(transcript))
         return {"backend": self.name, "model": self.model, "reasoning_effort": self.effort,
-                "budget_usd": self.budget, "claude_exit_code": exit_code}
+                "budget_usd": self.budget, "claude_exit_code": exit_code, "usage": usage,
+                "total_tokens": sum(usage.values()) if usage else None, "cost_usd": cost}
 
 
 def unique(paths):
@@ -393,7 +395,7 @@ def save_records(record_dir, run_folder, work, grading, result):
     record_dir.parent.mkdir(parents=True, exist_ok=True)
     partial = record_dir.parent / f".{record_dir.name}.partial-{os.getpid()}"
     partial.mkdir()
-    for name in ("transcript.jsonl", "opencode.stderr.log", "codex.stderr.log", "session.json"):
+    for name in ("transcript.jsonl", "opencode.stderr.log", "codex.stderr.log", "claude.stderr.log", "session.json"):
         if (run_folder / name).exists():
             shutil.copy2(run_folder / name, partial / name)
     if round_log(run_folder).exists():

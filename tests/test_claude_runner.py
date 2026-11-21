@@ -309,5 +309,66 @@ class ClaudeBudgetTest(ClaudeTestCase):
         self.assertFalse(result["passed"])
 
 
+class ClaudeRecordTest(ClaudeTestCase):
+    def test_saves_transcript_stderr_round_log_and_sources(self):
+        self.env["FAKE_CLAUDE_SCENARIO"] = "crash"
+
+        self.run_claude()
+
+        record = self.record_dir()
+        events = [json.loads(line) for line in (record / "transcript.jsonl").read_text().splitlines()]
+        self.assertEqual((events[0]["type"], events[0]["session_id"]), ("system", SESSION_ID))
+        self.assertIn("fake-claude: crashed", (record / "claude.stderr.log").read_text())
+        result = self.result()
+        self.assertEqual(result["claude_exit_code"], 1)
+        self.assertEqual(result["session_id"], SESSION_ID)
+
+    def test_round_log_and_sources_are_saved(self):
+        self.run_claude()
+
+        record = self.record_dir()
+        self.assertEqual(len((record / "lisp-check.log").read_text().splitlines()), 3)
+        self.assertTrue((record / "src" / "slide-row.lisp").is_file())
+
+    def test_one_turn_usage_and_cost(self):
+        self.run_claude()
+
+        result = self.result()
+        self.assertEqual(result["usage"], {"input_tokens": 100, "output_tokens": 300,
+                                           "cache_read_input_tokens": 5000, "cache_creation_input_tokens": 2000})
+        self.assertEqual(result["total_tokens"], 7400)
+        self.assertEqual(result["cost_usd"], 0.25)
+
+    def test_usage_and_cost_cover_both_turns_without_counting_the_first_twice(self):
+        self.env["FAKE_CLAUDE_SCENARIO"] = "stop-early"
+
+        self.run_claude()
+
+        result = self.result()
+        self.assertEqual(result["usage"], {"input_tokens": 160, "output_tokens": 520,
+                                           "cache_read_input_tokens": 13000, "cache_creation_input_tokens": 3000})
+        self.assertEqual(result["total_tokens"], 16680)
+        self.assertEqual(result["cost_usd"], 0.75)
+
+    def test_usage_survives_a_budget_stop(self):
+        self.env["FAKE_CLAUDE_SCENARIO"] = "budget"
+
+        self.run_claude()
+
+        result = self.result()
+        self.assertEqual(result["total_tokens"], 7400)
+        self.assertEqual(result["cost_usd"], 0.25)
+
+    def test_usage_is_null_when_claude_reports_none(self):
+        self.env["FAKE_CLAUDE_SCENARIO"] = "crash"
+
+        self.run_claude()
+
+        result = self.result()
+        self.assertIsNone(result["usage"])
+        self.assertIsNone(result["total_tokens"])
+        self.assertIsNone(result["cost_usd"])
+
+
 if __name__ == "__main__":
     unittest.main()
