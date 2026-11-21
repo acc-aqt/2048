@@ -304,9 +304,10 @@ AGENT_NOT_FOUND = (codex.CodexNotFound, claude.ClaudeNotFound)
 
 
 def kill_group(process, sig):
+    """Signal PROCESS's group; a group that is gone, or (macOS: EPERM) holds only zombies, is left alone."""
     try:
         os.killpg(process.pid, sig)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
 
 

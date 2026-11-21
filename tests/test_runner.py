@@ -6,6 +6,7 @@ import time
 import unittest
 from pathlib import Path
 
+from harness import runner
 from tests.support import docker_image_available
 
 REPO = Path(__file__).resolve().parent.parent
@@ -449,6 +450,16 @@ class ArgumentTest(RunnerTestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("run root", result.stderr)
                 self.assertFalse(root.exists())
+
+
+class StopGroupTest(unittest.TestCase):
+    def test_a_group_whose_members_already_exited_is_stopped_without_error(self):
+        process = subprocess.Popen(["true"], start_new_session=True, stdin=subprocess.DEVNULL)
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+
+        runner.stop_group(process)
+
+        self.assertEqual(process.returncode, 0)
 
 
 @unittest.skipUnless(docker_image_available(), "lisp-skills-allegro image not available")
