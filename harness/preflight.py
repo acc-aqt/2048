@@ -10,6 +10,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from harness.codex import CodexNotFound, find_codex as locate_codex
+
 LISP_CHECK = Path(__file__).resolve().parent.parent / "bin" / "lisp-check"
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
@@ -18,9 +20,6 @@ DEFAULT_API_KEY = "ollama"
 DEFAULT_TIMEOUT = "300"
 
 BACKENDS = ("claude", "codex", "opencode")
-CHATGPT_BUNDLED_CODEX = (
-    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
-)
 CODEX_NOT_FOUND = (
     "no Codex CLI found: not on PATH and not bundled in ChatGPT.app; "
     "set CODEX_BIN to the codex binary"
@@ -175,15 +174,11 @@ def check_claude_login(claude):
 
 
 def find_codex():
-    """CODEX_BIN, then `codex` on PATH, then the CLI bundled in ChatGPT.app; None if none."""
-    if "CODEX_BIN" in os.environ:
-        return os.environ["CODEX_BIN"]
-    on_path = shutil.which("codex")
-    if on_path:
-        return on_path
-    if os.access(CHATGPT_BUNDLED_CODEX, os.X_OK):
-        return CHATGPT_BUNDLED_CODEX
-    return None
+    """The Codex CLI run-task would use, or None if there is none."""
+    try:
+        return locate_codex()
+    except CodexNotFound:
+        return None
 
 
 def is_runnable(binary):
