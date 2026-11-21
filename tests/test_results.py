@@ -39,11 +39,13 @@ class ResultsTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def add_record(self, setup, number, passed=False, hidden=(30, 66), rounds=12, duration=1800.0,
-                   limit_hit=None, continue_sent=False, model="qwen3-8b-32k", task="game-2048"):
-        record = self.records / task / setup / str(number)
+                   limit_hit=None, continue_sent=False, model="qwen3-8b-32k", task="game-2048",
+                   records=None, **extra):
+        record = (records or self.records) / task / setup / str(number)
         (record / "src").mkdir(parents=True)
-        (record / "result.json").write_text(json.dumps({
-            "task": task, "setup": setup, "run_number": number, "counted": number != 0,
+        task_field = extra.pop("task_field", task)
+        (record / "result.json").write_text(json.dumps(extra | {
+            "task": task_field, "setup": setup, "run_number": number, "counted": number != 0,
             "model": model, "started_at": "2026-11-21T01:00:00+00:00",
             "duration_seconds": duration,
             "limits": {"max_rounds": 40, "timeout_seconds": 7200, "check_timeout_seconds": 120},
@@ -52,7 +54,7 @@ class ResultsTest(unittest.TestCase):
             "hidden_tests_passed": hidden[0], "hidden_tests_total": hidden[1],
             "source_files": {"game-2048.lisp": "OK" if passed else "FAIL"},
             "passed": passed, "session_id": "ses_x", "run_folder": "/tmp/x",
-        }))
+        } | extra))
 
     def add_full_batch(self, passing=None):
         """Five failing runs per setup; PASSING maps (setup, run) to the rounds of a passing run."""
@@ -76,6 +78,91 @@ class ResultsTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return self.output.read_text()
+
+    def overview(self, *records_dirs, task="game-2048", expect_exit=0):
+        completed = subprocess.run(
+            [str(RESULTS), task, "--overview", *map(str, records_dirs), "--output", str(self.output)],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(completed.returncode, expect_exit, completed.stderr)
+        return self.output.read_text() if expect_exit == 0 else completed.stderr
+
+    def add_backend_batch(self, records, backend, model, cost):
+        """Runs 1-3 per setup for BACKEND under RECORDS; with-skills passes, tokens and cost grow by run."""
+        for number in (1, 2, 3):
+            for setup in ("with-skills", "without-skills"):
+                passed = setup == "with-skills"
+                self.add_record(setup, number, records=records, model=model, backend=backend,
+                                reasoning_effort="low", passed=passed, hidden=(66 if passed else 10 * number, 66),
+                                rounds=number * 2, duration=60.0 * number, total_tokens=1000 * number,
+                                cost_usd=cost * number if cost is not None else None)
+
+    def test_overview_has_one_row_per_backend_and_setup(self):
+        claude, codex = self.root / "runs" / "claude", self.root / "runs" / "codex"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_backend_batch(codex, "codex", "gpt-6-luna", cost=None)
+
+        markdown = section(self.overview(claude, codex), "Overview")
+
+        self.assertEqual(table_row(markdown, "claude", "haiku", "low", "with-skills"),
+                         ["claude", "haiku", "low", "with-skills", "3", "3/3", "66/66", "4", "2 min",
+                          "2,000", "$1.00", "runs/claude"])
+        self.assertEqual(table_row(markdown, "claude", "haiku", "low", "without-skills")[5:7], ["0/3", "20/66"])
+        self.assertEqual(table_row(markdown, "codex", "gpt-6-luna", "low", "with-skills")[9:],
+                         ["2,000", "n/a", "runs/codex"])
+        self.assertEqual(table_row(markdown, "codex", "gpt-6-luna", "low", "without-skills")[5], "0/3")
+
+    def test_overview_lists_practice_runs_apart_and_leaves_them_out_of_the_numbers(self):
+        claude = self.root / "runs" / "claude"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_record("with-skills", 0, records=claude, model="haiku", backend="claude",
+                        reasoning_effort="low", rounds=99, total_tokens=9_999_999, cost_usd=99.0)
+
+        output = self.overview(claude)
+
+        self.assertEqual(table_row(section(output, "Overview"), "claude", "haiku", "low", "with-skills")[4:11],
+                         ["3", "3/3", "66/66", "4", "2 min", "2,000", "$1.00"])
+        practice = section(output, "Practice runs (not counted)")
+        self.assertEqual(table_row(practice, "claude", "with-skills", "0")[3:5], ["99", "30/66"])
+        self.assertIn("9,999,999", practice)
+        self.assertIn("$99.00", practice)
+
+    def test_overview_refuses_a_records_directory_without_the_task(self):
+        claude, other = self.root / "runs" / "claude", self.root / "runs" / "other"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_record("with-skills", 1, records=other, task="dummy-slide-row", backend="codex")
+
+        error = self.overview(claude, other, expect_exit=2)
+
+        self.assertIn(str(other), error)
+        self.assertIn("dummy-slide-row", error)
+        self.assertFalse(self.output.exists())
+
+    def test_overview_refuses_records_of_another_task(self):
+        claude = self.root / "runs" / "claude"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_record("with-skills", 4, records=claude, backend="claude", task_field="dummy-slide-row")
+
+        error = self.overview(claude, expect_exit=2)
+
+        self.assertIn("dummy-slide-row", error)
+        self.assertFalse(self.output.exists())
+
+    def test_overview_states_method_and_threats(self):
+        claude, codex = self.root / "runs" / "claude", self.root / "runs" / "codex"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_backend_batch(codex, "codex", "gpt-6-luna", cost=None)
+
+        output = self.overview(claude, codex)
+
+        method = section(output, "Method")
+        for phrase in ("tasks/game-2048/spec.md", PINNED_LISP_SKILLS, "40 check-fix rounds",
+                       "`CLAUDE.md`", "`AGENTS.md`", "`haiku`", "`gpt-6-luna`"):
+            self.assertIn(phrase, method)
+        threats = section(output, "Threats to validity")
+        for phrase in ("agent harness", "not the model alone", "5 runs per setup"):
+            self.assertIn(phrase, threats)
+        self.assertNotIn("Q4_K_M", threats)
 
     def test_one_table_row_per_counted_run(self):
         self.add_full_batch()
@@ -199,6 +286,60 @@ class ResultsTest(unittest.TestCase):
 
         self.assertNotIn("## Play the best game", output)
         self.assertNotIn(":play)", output)
+
+    def test_method_describes_a_claude_only_report(self):
+        self.add_record("with-skills", 1, model="haiku", backend="claude", reasoning_effort="low",
+                        budget_usd=5)
+
+        method = section(self.results(), "Method")
+
+        self.assertIn("Claude Code", method)
+        self.assertIn("`haiku`", method)
+        self.assertIn("`low` effort", method)
+        self.assertIn("CLAUDE.md", method)
+        self.assertNotIn("OpenCode", method)
+
+    def test_method_describes_a_codex_only_report(self):
+        self.add_record("with-skills", 1, model="gpt-6-luna", backend="codex", reasoning_effort="low")
+
+        method = section(self.results(), "Method")
+
+        self.assertIn("Codex CLI", method)
+        self.assertIn("`gpt-6-luna`", method)
+        self.assertIn("AGENTS.md", method)
+        self.assertNotIn("OpenCode", method)
+
+    def test_claude_only_report_does_not_mention_opencode_or_local_quantisation(self):
+        self.add_record("with-skills", 1, model="haiku", backend="claude", reasoning_effort="low")
+
+        output = self.results()
+
+        self.assertNotIn("OpenCode", output)
+        self.assertNotIn("Q4_K_M", output)
+        self.assertIn("Claude Code turns", section(output, "Summary per setup"))
+        self.assertIn("agent harness", section(output, "Threats to validity"))
+
+    def test_summary_shows_median_tokens_and_cost_when_records_have_them(self):
+        for number, tokens, cost in ((1, 100_000, 0.5), (2, 300_000, 1.25), (3, 200_000, 2.0)):
+            self.add_record("with-skills", number, model="haiku", backend="claude", reasoning_effort="low",
+                            total_tokens=tokens, cost_usd=cost)
+        self.add_record("without-skills", 1, model="haiku", backend="claude", reasoning_effort="low",
+                        total_tokens=None, cost_usd=None)
+
+        markdown = section(self.results(), "Summary per setup")
+
+        self.assertIn("| Median tokens | Median cost |", markdown)
+        self.assertEqual(table_row(markdown, "with-skills")[-2:], ["200,000", "$1.25"])
+        self.assertEqual(table_row(markdown, "without-skills")[-2:], ["n/a", "n/a"])
+
+    def test_codex_summary_shows_tokens_but_no_cost(self):
+        self.add_record("with-skills", 1, model="gpt-6-luna", backend="codex", reasoning_effort="low",
+                        total_tokens=1234, cost_usd=None)
+
+        markdown = section(self.results(), "Summary per setup")
+
+        self.assertEqual(table_row(markdown, "with-skills")[-1], "1,234")
+        self.assertNotIn("Median cost", markdown)
 
     def test_counted_runs_are_sorted_by_run_then_setup(self):
         self.add_record("without-skills", 2)
