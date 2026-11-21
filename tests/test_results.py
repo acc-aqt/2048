@@ -233,6 +233,28 @@ class ResultsTest(unittest.TestCase):
         self.assertIn("Claude Code turns", section(output, "Summary per setup"))
         self.assertIn("agent harness", section(output, "Threats to validity"))
 
+    def test_summary_shows_median_tokens_and_cost_when_records_have_them(self):
+        for number, tokens, cost in ((1, 100_000, 0.5), (2, 300_000, 1.25), (3, 200_000, 2.0)):
+            self.add_record("with-skills", number, model="haiku", backend="claude", reasoning_effort="low",
+                            total_tokens=tokens, cost_usd=cost)
+        self.add_record("without-skills", 1, model="haiku", backend="claude", reasoning_effort="low",
+                        total_tokens=None, cost_usd=None)
+
+        markdown = section(self.results(), "Summary per setup")
+
+        self.assertIn("| Median tokens | Median cost |", markdown)
+        self.assertEqual(table_row(markdown, "with-skills")[-2:], ["200,000", "$1.25"])
+        self.assertEqual(table_row(markdown, "without-skills")[-2:], ["n/a", "n/a"])
+
+    def test_codex_summary_shows_tokens_but_no_cost(self):
+        self.add_record("with-skills", 1, model="gpt-6-luna", backend="codex", reasoning_effort="low",
+                        total_tokens=1234, cost_usd=None)
+
+        markdown = section(self.results(), "Summary per setup")
+
+        self.assertEqual(table_row(markdown, "with-skills")[-1], "1,234")
+        self.assertNotIn("Median cost", markdown)
+
     def test_counted_runs_are_sorted_by_run_then_setup(self):
         self.add_record("without-skills", 2)
         self.add_record("with-skills", 1)
