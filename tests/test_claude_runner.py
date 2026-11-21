@@ -394,5 +394,33 @@ class LeakFlagTest(ClaudeTestCase):
                 self.assertIs(self.result(run_number=str(number))["suspected_leak"], False)
 
 
+class LocatingClaudeTest(ClaudeTestCase):
+    def setUp(self):
+        super().setUp()
+        del self.env["CLAUDE_BIN"]
+        self.env["PATH"] = os.pathsep.join(
+            d for d in self.env["PATH"].split(os.pathsep) if not (Path(d) / "claude").exists())
+
+    def test_uses_claude_on_path(self):
+        path_dir = Path(self.tmp.name) / "path-bin"
+        path_dir.mkdir()
+        (path_dir / "claude").symlink_to(FAKE_CLAUDE)
+        self.env["PATH"] = f"{path_dir}{os.pathsep}{self.env['PATH']}"
+
+        completed = self.run_claude()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(len(self.seen()), 1)
+
+    def test_fails_naming_claude_bin_when_no_claude_is_found(self):
+        completed = self.run_claude()
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("CLAUDE_BIN", completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
+        self.assertFalse(self.record_dir().exists())
+        self.assertFalse(self.run_root.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

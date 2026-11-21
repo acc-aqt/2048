@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 DEFAULT_MODEL = "haiku"
@@ -16,9 +17,18 @@ BUILTIN_PLUGINS = ("cc-plugin-agents-md", "cc-plugin-telemetry", "cc-plugin-priv
                    "cc-plugin-plugin-authoring", "cc-plugin-easel")
 
 
+class ClaudeNotFound(Exception):
+    pass
+
+
 def find_claude():
     """$CLAUDE_BIN, else `claude` on PATH."""
-    return os.environ.get("CLAUDE_BIN") or "claude"
+    if os.environ.get("CLAUDE_BIN"):
+        return os.environ["CLAUDE_BIN"]
+    on_path = shutil.which("claude")
+    if on_path:
+        return on_path
+    raise ClaudeNotFound("no Claude Code CLI found: `claude` is not on PATH; set CLAUDE_BIN to the claude binary")
 
 
 def model_settings(model=None, effort=None):

@@ -292,7 +292,7 @@ class ClaudeBackend:
 # continue_turn(sid, message), session_id(transcript), turn_limit(transcript) (a limit the agent itself
 # stopped at, or None), finish(sid) and result_fields(transcript, exit_code).
 BACKENDS = {backend.name: backend for backend in (OpenCodeBackend, CodexBackend, ClaudeBackend)}
-AGENT_NOT_FOUND = (codex.CodexNotFound,)
+AGENT_NOT_FOUND = (codex.CodexNotFound, claude.ClaudeNotFound)
 
 
 def kill_group(process, sig):
