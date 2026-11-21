@@ -12,6 +12,7 @@ from tests.test_lisp_check import FAKE_DOCKER, docker_image_available
 
 PREFLIGHT = Path(__file__).resolve().parent.parent / "bin" / "preflight"
 FAKE_LOGIN_CLI = Path(__file__).resolve().parent / "fixtures" / "fake-login-cli"
+FAKE_OPENCODE = Path(__file__).resolve().parent / "fixtures" / "fake-opencode"
 CLAUDE_LOGGED_IN = '{"loggedIn": true, "authMethod": "claude.ai"}\n'
 CLAUDE_LOGGED_OUT = '{"loggedIn": false, "authMethod": "none"}\n'
 
@@ -151,7 +152,7 @@ class PreflightCommandTest(unittest.TestCase):
             k: v
             for k, v in os.environ.items()
             if not k.startswith(("LISP_CHECK_", "LLM_", "FAKE_DOCKER_", "FAKE_CLI_"))
-            and k not in ("CLAUDE_BIN", "CODEX_BIN")
+            and k not in ("CLAUDE_BIN", "CODEX_BIN", "OPENCODE_BIN")
         }
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -234,16 +235,38 @@ class PreflightCommandTest(unittest.TestCase):
         self.assertRegex(result.stdout, rf"(?m)^PASS .*Codex.*{bin_dir / 'codex'}")
         self.assertEqual(self.cli_calls(), [["login", "status"]])
 
+    def test_without_backend_checks_the_claude_and_codex_clis_it_finds(self):
+        self.use_fake_docker(stdout="OK\n", exit=0)
+        self.use_fake_cli("CLAUDE_BIN", stdout=CLAUDE_LOGGED_IN)
+        self.env["CODEX_BIN"] = str(FAKE_LOGIN_CLI)
+        self.env["OPENCODE_BIN"] = str(self.tmp / "no-such-opencode")
+        result = self.run_preflight()
+        self.assertRegex(result.stdout, r"(?m)^PASS .*Claude")
+        self.assertRegex(result.stdout, r"(?m)^PASS .*Codex")
+        self.assertNotIn("tool call", result.stdout)
+
+    def test_without_backend_checks_opencode_when_only_opencode_is_found(self):
+        self.use_fake_docker(stdout="OK\n", exit=0)
+        self.env.update(
+            CLAUDE_BIN=str(self.tmp / "no-such-claude"),
+            CODEX_BIN=str(self.tmp / "no-such-codex"),
+            OPENCODE_BIN=str(FAKE_OPENCODE),
+        )
+        result = self.run_preflight("--skip-model")
+        self.assertIn("SKIP model tool call", result.stdout)
+        self.assertNotIn("Claude", result.stdout)
+        self.assertNotIn("Codex", result.stdout)
+
     def test_docker_failure_is_reported_with_its_reason(self):
         self.use_fake_docker(stderr="Unable to find image 'nope:latest'\n", exit=125)
-        result = self.run_preflight("--skip-model")
+        result = self.run_preflight("--backend", "opencode", "--skip-model")
         self.assertEqual(result.returncode, 1)
         self.assertIn("FAIL", result.stdout)
         self.assertIn("Unable to find image 'nope:latest'", result.stdout)
 
     def test_lisp_check_that_never_fails_is_caught(self):
         self.use_fake_docker(stdout="OK\n", exit=0)
-        result = self.run_preflight("--skip-model")
+        result = self.run_preflight("--backend", "opencode", "--skip-model")
         self.assertEqual(result.returncode, 1)
         self.assertRegex(result.stdout, r"FAIL .*broken")
 
@@ -252,7 +275,7 @@ class PreflightCommandTest(unittest.TestCase):
         reply = {"choices": [{"message": {"role": "assistant", "content": "no tools today"}}]}
         with FakeModelServer(body=reply) as server:
             self.env["LLM_BASE_URL"] = server.base_url
-            result = self.run_preflight()
+            result = self.run_preflight("--backend", "opencode")
         self.assertEqual(result.returncode, 1)
         self.assertRegex(result.stdout, r"FAIL .*tool call.*no tools today")
 
@@ -260,7 +283,7 @@ class PreflightCommandTest(unittest.TestCase):
     def test_passes_with_working_lisp_check_and_model(self):
         with FakeModelServer(body=tool_call_reply()) as server:
             self.env.update(LLM_BASE_URL=server.base_url, LLM_MODEL="qwen", LLM_API_KEY="k")
-            result = self.run_preflight()
+            result = self.run_preflight("--backend", "opencode")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertNotRegex(result.stdout, r"(?m)^FAIL ")
         self.assertEqual(server.requests[0]["json"]["model"], "qwen")
@@ -268,7 +291,7 @@ class PreflightCommandTest(unittest.TestCase):
     @unittest.skipUnless(docker_image_available(), "lisp-skills-allegro image not available")
     def test_skip_model_sends_no_request(self):
         self.env["LLM_BASE_URL"] = "http://127.0.0.1:9/v1"
-        result = self.run_preflight("--skip-model")
+        result = self.run_preflight("--backend", "opencode", "--skip-model")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("skipped", result.stdout)
 

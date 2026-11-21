@@ -186,6 +186,23 @@ def find_codex():
     return None
 
 
+def is_runnable(binary):
+    return shutil.which(binary) is not None
+
+
+def found_backends():
+    """The backends whose CLI is installed, used when no --backend is given."""
+    found = []
+    if is_runnable(os.environ.get("CLAUDE_BIN", "claude")):
+        found.append("claude")
+    codex = find_codex()
+    if codex is not None and is_runnable(codex):
+        found.append("codex")
+    if is_runnable(os.environ.get("OPENCODE_BIN", "opencode")):
+        found.append("opencode")
+    return found
+
+
 def check_codex_login(codex):
     """Return None if `codex login status` succeeds, else a reason. Sends no prompt."""
     command = [codex, "login", "status"]
@@ -216,19 +233,20 @@ def report(label, problem):
 
 def main(args):
     parser = argparse.ArgumentParser(
-        prog="preflight", description="Check lisp-check and the model before a run."
+        prog="preflight",
+        description="Check lisp-check and each backend before a run.",
     )
     parser.add_argument(
-        "--skip-model", action="store_true", help="do not send a request to the model"
+        "--skip-model", action="store_true", help="opencode: do not send a request to the model"
     )
     parser.add_argument(
         "--backend",
         action="append",
         choices=BACKENDS,
-        help="backend to check (repeatable)",
+        help="backend to check (repeatable); default: every backend whose CLI is installed",
     )
     options = parser.parse_args(args)
-    backends = options.backend or ["opencode"]
+    backends = options.backend or found_backends()
 
     results = []
     with tempfile.TemporaryDirectory(prefix="preflight-") as tmp:
@@ -241,6 +259,12 @@ def main(args):
         results.append(report(
             "lisp-check prints FAIL on a broken file",
             check_lisp_file(run_dir, "broken.lisp", BROKEN_LISP, "FAIL"),
+        ))
+
+    if not backends:
+        results.append(report(
+            "a backend CLI is installed",
+            "found none of claude, codex, opencode; pass --backend",
         ))
 
     if "claude" in backends:
