@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import unittest
 from pathlib import Path
@@ -292,6 +293,45 @@ class CodexRecordTest(CodexTestCase):
 
         self.assertEqual(len((self.record_dir() / "lisp-check.log").read_text().splitlines()), 3)
         self.assertEqual(self.result()["check_fix_rounds"], 3)
+
+
+class LocatingCodexTest(CodexTestCase):
+    def setUp(self):
+        super().setUp()
+        del self.env["CODEX_BIN"]
+        self.env["PATH"] = os.pathsep.join(
+            d for d in self.env["PATH"].split(os.pathsep) if not (Path(d) / "codex").exists())
+
+    def test_uses_codex_on_path(self):
+        path_dir = Path(self.tmp.name) / "path-bin"
+        path_dir.mkdir()
+        (path_dir / "codex").symlink_to(FAKE_CODEX)
+        self.env["PATH"] = f"{path_dir}{os.pathsep}{self.env['PATH']}"
+        self.env["CODEX_BUNDLED_BIN"] = str(Path(self.tmp.name) / "no-such-codex")
+
+        completed = self.run_codex()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(len(self.seen()), 1)
+
+    def test_falls_back_to_the_codex_bundled_with_the_chatgpt_app(self):
+        self.env["CODEX_BUNDLED_BIN"] = str(FAKE_CODEX)
+
+        completed = self.run_codex()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(len(self.seen()), 1)
+
+    def test_fails_naming_codex_bin_when_no_codex_is_found(self):
+        self.env["CODEX_BUNDLED_BIN"] = str(Path(self.tmp.name) / "no-such-codex")
+
+        completed = self.run_codex()
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("CODEX_BIN", completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
+        self.assertFalse(self.record_dir().exists())
+        self.assertFalse(self.run_root.exists())
 
 
 if __name__ == "__main__":

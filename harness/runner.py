@@ -140,8 +140,12 @@ class OpenCodeBackend:
     name = "opencode"
     stderr_log = "opencode.stderr.log"
 
-    def __init__(self, args, run_folder, work, setup):
-        self.binary = os.environ.get("OPENCODE_BIN", "opencode")
+    @staticmethod
+    def find_binary():
+        return os.environ.get("OPENCODE_BIN", "opencode")
+
+    def __init__(self, binary, args, run_folder, work, setup):
+        self.binary = binary
         self.work = work
         self.run_folder = run_folder
         self.env = opencode_env(run_folder, setup)
@@ -170,8 +174,12 @@ class CodexBackend:
     name = "codex"
     stderr_log = "codex.stderr.log"
 
-    def __init__(self, args, run_folder, work, setup):
-        self.binary = os.environ.get("CODEX_BIN", "codex")
+    @staticmethod
+    def find_binary():
+        return codex.find_codex()
+
+    def __init__(self, binary, args, run_folder, work, setup):
+        self.binary = binary
         self.model, self.effort = codex.model_settings(args.model, args.reasoning_effort)
         self.env = with_lisp_check(codex.isolated_env(run_folder / "codex-home", os.environ), run_folder)
         self.options = codex.exec_options(self.model, self.effort, round_log(run_folder).parent)
@@ -196,7 +204,11 @@ class CodexBackend:
                 "codex_exit_code": exit_code, "usage": usage, "total_tokens": total_tokens, "cost_usd": None}
 
 
+# Every backend has find_binary(), which may raise one of AGENT_NOT_FOUND, and, once built with
+# (binary, args, run_folder, work, setup): env, stderr_log, first_turn(message),
+# continue_turn(sid, message), session_id(transcript), finish(sid) and result_fields(transcript, exit_code).
 BACKENDS = {backend.name: backend for backend in (OpenCodeBackend, CodexBackend)}
+AGENT_NOT_FOUND = (codex.CodexNotFound,)
 
 
 def kill_group(process, sig):
@@ -332,10 +344,16 @@ def main(argv):
         print(f"run-task: record {record_dir} already exists; not overwriting it", file=sys.stderr)
         return 1
 
+    try:
+        binary = BACKENDS[args.backend].find_binary()
+    except AGENT_NOT_FOUND as error:
+        print(f"run-task: {error}", file=sys.stderr)
+        return 1
+
     started = utc_now()
     run_folder = args.run_root / args.task / args.setup / f"{args.run_number}-{started:%Y%m%dT%H%M%SZ}"
     work = prepare_run_folder(run_folder)
-    backend = BACKENDS[args.backend](args, run_folder, work, setup)
+    backend = BACKENDS[args.backend](binary, args, run_folder, work, setup)
     transcript = run_folder / "transcript.jsonl"
     spec = (task_dir / "spec.md").read_text()
     message = prompt(spec, setup.prompt_note)

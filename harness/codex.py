@@ -1,13 +1,33 @@
 """Running the Codex CLI isolated from the user's own Codex setup."""
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 DEFAULT_MODEL = "gpt-6-luna"
 DEFAULT_EFFORT = "low"
+BUNDLED_BIN = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
 PERMISSIONS_PROFILE = "harness"
 DOCKER_QUERY_TIMEOUT = 30
+
+
+class CodexNotFound(Exception):
+    pass
+
+
+def find_codex():
+    """$CODEX_BIN, else `codex` on PATH, else the Codex CLI bundled with the ChatGPT app."""
+    if os.environ.get("CODEX_BIN"):
+        return os.environ["CODEX_BIN"]
+    on_path = shutil.which("codex")
+    if on_path:
+        return on_path
+    bundled = os.environ.get("CODEX_BUNDLED_BIN", BUNDLED_BIN)
+    if os.access(bundled, os.X_OK):
+        return bundled
+    raise CodexNotFound(f"no Codex CLI found: not on PATH and not at {bundled}; "
+                        "set CODEX_BIN to the codex binary")
 
 
 def model_settings(model=None, effort=None):
