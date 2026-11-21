@@ -2,7 +2,7 @@ import json
 import unittest
 from pathlib import Path
 
-from tests.test_runner import FIXTURES, RunnerTestCase, WRONG
+from tests.test_runner import FIXTURES, LISP_RULES, RunnerTestCase, WRONG
 
 FAKE_CODEX = FIXTURES / "fake-codex"
 
@@ -131,6 +131,11 @@ class CodexIsolationTest(CodexTestCase):
         self.assertIn(f'permissions.harness.network={{"enabled"=true, "unix_sockets"={{"{socket}"="allow"}}}}',
                       overrides)
 
+    def test_tests_never_touch_the_users_codex_home(self):
+        self.run_codex()
+
+        self.assertEqual(sorted(p.name for p in self.user_codex_home.iterdir()), ["auth.json", "config.toml"])
+
     def test_no_login_means_no_auth_link(self):
         (self.user_codex_home / "auth.json").unlink()
 
@@ -138,6 +143,38 @@ class CodexIsolationTest(CodexTestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(self.seen()[0]["codex_home"], {})
+
+
+class CodexSetupTest(CodexTestCase):
+    def test_with_skills_finds_the_pinned_rules_as_agents_md_in_its_folder(self):
+        self.run_codex(setup="with-skills")
+
+        (seen,) = self.seen()
+        self.assertEqual(seen["files"], ["AGENTS.md"])
+        self.assertEqual(seen["agents_md"], LISP_RULES.read_text())
+
+    def test_without_skills_never_sees_the_rules(self):
+        self.run_codex(setup="without-skills")
+
+        (seen,) = self.seen()
+        self.assertIsNone(seen["agents_md"])
+        run_folder = Path(seen["cwd"]).parent
+        rules = LISP_RULES.read_text()
+        for path in run_folder.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                self.assertNotIn(rules, path.read_text(errors="replace"), path)
+
+    def test_prompt_is_the_same_as_opencodes(self):
+        self.env["FAKE_OPENCODE_SOLUTION"] = str(WRONG)
+        for setup in ("with-skills", "without-skills"):
+            with self.subTest(setup=setup):
+                self.run_codex(setup=setup, run_number="1")
+                self.run_task(setup=setup, run_number="2")
+
+                codex_prompt = self.seen()[-1]["argv"][-1]
+                opencode_seen = [json.loads(line) for line in
+                                 (Path(self.tmp.name) / "fake-opencode-seen.jsonl").read_text().splitlines()]
+                self.assertEqual(codex_prompt, opencode_seen[-1]["argv"][-1])
 
 
 if __name__ == "__main__":

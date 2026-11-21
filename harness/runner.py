@@ -175,6 +175,8 @@ class CodexBackend:
         self.model, self.effort = codex.model_settings(args.model, args.reasoning_effort)
         self.env = with_lisp_check(codex.isolated_env(run_folder / "codex-home", os.environ), run_folder)
         self.options = codex.exec_options(self.model, self.effort, round_log(run_folder).parent)
+        if setup.rules_file is not None:
+            shutil.copy2(setup.rules_file, work / "AGENTS.md")
 
     def first_turn(self, message):
         return [self.binary, "exec", *self.options, message]
