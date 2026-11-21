@@ -43,8 +43,9 @@ class ResultsTest(unittest.TestCase):
                    records=None, **extra):
         record = (records or self.records) / task / setup / str(number)
         (record / "src").mkdir(parents=True)
+        task_field = extra.pop("task_field", task)
         (record / "result.json").write_text(json.dumps(extra | {
-            "task": task, "setup": setup, "run_number": number, "counted": number != 0,
+            "task": task_field, "setup": setup, "run_number": number, "counted": number != 0,
             "model": model, "started_at": "2026-11-21T01:00:00+00:00",
             "duration_seconds": duration,
             "limits": {"max_rounds": 40, "timeout_seconds": 7200, "check_timeout_seconds": 120},
@@ -125,6 +126,27 @@ class ResultsTest(unittest.TestCase):
         self.assertEqual(table_row(practice, "claude", "with-skills", "0")[3:5], ["99", "30/66"])
         self.assertIn("9,999,999", practice)
         self.assertIn("$99.00", practice)
+
+    def test_overview_refuses_a_records_directory_without_the_task(self):
+        claude, other = self.root / "runs" / "claude", self.root / "runs" / "other"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_record("with-skills", 1, records=other, task="dummy-slide-row", backend="codex")
+
+        error = self.overview(claude, other, expect_exit=2)
+
+        self.assertIn(str(other), error)
+        self.assertIn("dummy-slide-row", error)
+        self.assertFalse(self.output.exists())
+
+    def test_overview_refuses_records_of_another_task(self):
+        claude = self.root / "runs" / "claude"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_record("with-skills", 4, records=claude, backend="claude", task_field="dummy-slide-row")
+
+        error = self.overview(claude, expect_exit=2)
+
+        self.assertIn("dummy-slide-row", error)
+        self.assertFalse(self.output.exists())
 
     def test_one_table_row_per_counted_run(self):
         self.add_full_batch()

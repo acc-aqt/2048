@@ -5,6 +5,7 @@ import json
 import re
 import statistics
 import subprocess
+import sys
 from pathlib import Path
 
 from harness.batch import COUNTED_RUNS
@@ -344,9 +345,26 @@ Each row covers the counted runs (1 to {COUNTED_RUNS[-1]}) of one backend and se
 """
 
 
+def mixing_error(task, records_dir, records):
+    """Why RECORDS from RECORDS_DIR can't go into an overview of TASK, or None if they can."""
+    others = sorted({r["task"] for r in records if r["task"] != task})
+    if others:
+        return f"{records_dir} has records for {', '.join(others)} under {task}/; refusing to mix tasks"
+    if not records:
+        found = sorted({path.parts[-4] for path in Path(records_dir).glob("*/*/*/result.json")})
+        return f"{records_dir} has no records for {task} (found: {', '.join(found) or 'none'})"
+    return None
+
+
 def overview(args):
-    sources = [(records_location(records_dir, args.output), load_records(records_dir, args.task))
-               for records_dir in args.overview]
+    sources = []
+    for records_dir in args.overview:
+        records = load_records(records_dir, args.task)
+        error = mixing_error(args.task, records_dir, records)
+        if error:
+            print(f"results: {error}", file=sys.stderr)
+            return 2
+        sources.append((records_location(records_dir, args.output), records))
     Path(args.output).write_text(render_overview(args.task, sources, lisp_skills_commit()))
     count = sum(len(records) for _, records in sources)
     print(f"results: wrote {args.output} from {count} records in {len(sources)} records directories")
