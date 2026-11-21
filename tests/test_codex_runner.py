@@ -25,6 +25,7 @@ class CodexTestCase(RunnerTestCase):
             CODEX_HOME=str(self.user_codex_home),
             FAKE_CODEX_RECORD=str(self.seen_file),
             FAKE_CODEX_SOLUTION=str(WRONG),
+            DOCKER_HOST=f"unix://{root / 'docker.sock'}",
         )
         self.use_fake_docker_printing_ok()
 
@@ -47,6 +48,96 @@ class CodexModelTest(CodexTestCase):
         self.assertEqual(result["backend"], "codex")
         self.assertEqual(result["model"], "gpt-6-luna")
         self.assertEqual(result["reasoning_effort"], "low")
+
+    def test_model_and_effort_can_be_overridden_by_flags(self):
+        self.env.update(CODEX_MODEL="from-env", CODEX_REASONING_EFFORT="medium")
+
+        self.run_codex("--model", "gpt-other", "--reasoning-effort", "high")
+
+        argv = self.seen()[0]["argv"]
+        self.assertEqual(argv[argv.index("-m") + 1], "gpt-other")
+        self.assertIn('model_reasoning_effort="high"', argv)
+        result = self.result()
+        self.assertEqual((result["model"], result["reasoning_effort"]), ("gpt-other", "high"))
+
+    def test_model_and_effort_can_be_overridden_by_environment(self):
+        self.env.update(CODEX_MODEL="from-env", CODEX_REASONING_EFFORT="medium")
+
+        self.run_codex()
+
+        argv = self.seen()[0]["argv"]
+        self.assertEqual(argv[argv.index("-m") + 1], "from-env")
+        self.assertIn('model_reasoning_effort="medium"', argv)
+
+    def test_opencode_rejects_model_flags(self):
+        completed = self.run_task("--model", "gpt-other")
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("--backend codex", completed.stderr)
+
+
+def config_overrides(argv):
+    return [argv[i + 1] for i, arg in enumerate(argv) if arg == "-c"]
+
+
+class CodexIsolationTest(CodexTestCase):
+    def test_runs_hands_off_in_an_empty_git_folder_in_the_run_root(self):
+        self.run_codex()
+
+        (seen,) = self.seen()
+        self.assertEqual(seen["files"], [])
+        self.assertTrue(Path(seen["cwd"]).is_relative_to(self.run_root))
+        self.assertTrue(seen["stdin_is_devnull"])
+        self.assertIn('approval_policy="never"', config_overrides(seen["argv"]))
+
+    def test_codex_home_is_per_run_and_reuses_only_the_users_login(self):
+        self.run_codex()
+
+        (seen,) = self.seen()
+        self.assertTrue(Path(seen["env"]["CODEX_HOME"]).is_relative_to(self.run_root))
+        self.assertEqual(seen["codex_home"], {"auth.json": str(self.user_codex_home / "auth.json")})
+        self.assertIn("--ignore-user-config", seen["argv"])
+        self.assertIn("--ignore-rules", seen["argv"])
+
+    def test_plugins_bundled_skills_subagents_and_web_search_are_off(self):
+        self.run_codex()
+
+        argv = self.seen()[0]["argv"]
+        self.assertEqual(argv[argv.index("--disable") + 1], "multi_agent")
+        for override in ("features.plugins=false", "skills.include_instructions=false",
+                         'web_search="disabled"'):
+            self.assertIn(override, config_overrides(argv))
+
+    def test_sandbox_lets_the_model_write_only_its_folder_and_the_round_log(self):
+        self.run_codex()
+
+        (seen,) = self.seen()
+        overrides = config_overrides(seen["argv"])
+        self.assertIn('default_permissions="harness"', overrides)
+        (filesystem,) = [o for o in overrides if o.startswith("permissions.harness.filesystem=")]
+        round_log_dir = Path(seen["env"]["LISP_CHECK_LOG"]).parent
+        self.assertEqual(filesystem, 'permissions.harness.filesystem='
+                                     f'{{":root"="read", ":project_roots"="write", "{round_log_dir}"="write"}}')
+        self.assertFalse(round_log_dir.is_relative_to(seen["cwd"]))
+        self.assertNotEqual(round_log_dir, Path(seen["cwd"]).parent)
+
+    def test_sandbox_lets_lisp_check_reach_the_docker_socket(self):
+        socket = Path(self.tmp.name).resolve() / "docker.sock"
+        self.env["DOCKER_HOST"] = f"unix://{socket}"
+
+        self.run_codex()
+
+        overrides = config_overrides(self.seen()[0]["argv"])
+        self.assertIn(f'permissions.harness.network={{"enabled"=true, "unix_sockets"={{"{socket}"="allow"}}}}',
+                      overrides)
+
+    def test_no_login_means_no_auth_link(self):
+        (self.user_codex_home / "auth.json").unlink()
+
+        completed = self.run_codex()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.seen()[0]["codex_home"], {})
 
 
 if __name__ == "__main__":

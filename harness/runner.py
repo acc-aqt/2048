@@ -106,16 +106,22 @@ def prepare_run_folder(run_folder):
     work = run_folder / "work"
     work.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(work)], check=True, stdin=subprocess.DEVNULL)
+    round_log(run_folder).parent.mkdir()
     bin_dir = run_folder / "bin"
     bin_dir.mkdir()
     (bin_dir / "lisp-check").symlink_to(LISP_CHECK)
     return work
 
 
+def round_log(run_folder):
+    """The log with one line per lisp-check the model runs; its folder holds nothing else."""
+    return run_folder / "rounds" / "lisp-check.log"
+
+
 def with_lisp_check(env, run_folder):
     """ENV plus the run's lisp-check wrapper first on PATH and the round log it writes to."""
     env["PATH"] = f"{run_folder / 'bin'}{os.pathsep}{env.get('PATH', '')}"
-    env["LISP_CHECK_LOG"] = str(run_folder / "lisp-check.log")
+    env["LISP_CHECK_LOG"] = str(round_log(run_folder))
     return env
 
 
@@ -167,13 +173,14 @@ class CodexBackend:
     def __init__(self, args, run_folder, work, setup):
         self.binary = os.environ.get("CODEX_BIN", "codex")
         self.model, self.effort = codex.model_settings(args.model, args.reasoning_effort)
-        self.env = with_lisp_check(dict(os.environ), run_folder)
+        self.env = with_lisp_check(codex.isolated_env(run_folder / "codex-home", os.environ), run_folder)
+        self.options = codex.exec_options(self.model, self.effort, round_log(run_folder).parent)
 
     def first_turn(self, message):
-        return [self.binary, "exec", *codex.exec_options(self.model, self.effort), message]
+        return [self.binary, "exec", *self.options, message]
 
     def continue_turn(self, sid, message):
-        return [self.binary, "exec", "resume", *codex.exec_options(self.model, self.effort), sid, message]
+        return [self.binary, "exec", "resume", *self.options, sid, message]
 
     def session_id(self, transcript):
         return first_event_value(transcript, "thread_id")
@@ -300,9 +307,11 @@ def save_records(record_dir, run_folder, work, grading, result):
     record_dir.parent.mkdir(parents=True, exist_ok=True)
     partial = record_dir.parent / f".{record_dir.name}.partial-{os.getpid()}"
     partial.mkdir()
-    for name in ("transcript.jsonl", "opencode.stderr.log", "codex.stderr.log", "session.json", "lisp-check.log"):
+    for name in ("transcript.jsonl", "opencode.stderr.log", "codex.stderr.log", "session.json"):
         if (run_folder / name).exists():
             shutil.copy2(run_folder / name, partial / name)
+    if round_log(run_folder).exists():
+        shutil.copy2(round_log(run_folder), partial / "lisp-check.log")
     (partial / "grading.log").write_text(grading["log"])
     copy_model_files(work, partial / "src")
     (partial / "result.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -337,7 +346,7 @@ def main(argv):
         start = time.monotonic()
         outcome = run_turn(command, work, backend.env, transcript,
                            run_folder / backend.stderr_log, max(args.timeout - model_seconds, 0),
-                           run_folder / "lisp-check.log", args.max_rounds)
+                           round_log(run_folder), args.max_rounds)
         model_seconds += time.monotonic() - start
         return outcome
 
@@ -365,7 +374,7 @@ def main(argv):
                    "check_timeout_seconds": args.check_timeout},
         "limit_hit": limit_hit,
         "continue_sent": continue_sent,
-        "check_fix_rounds": count_rounds(run_folder / "lisp-check.log"),
+        "check_fix_rounds": count_rounds(round_log(run_folder)),
         "hidden_tests_passed": grading["hidden_tests_passed"],
         "hidden_tests_total": grading["hidden_tests_total"],
         "source_files": grading["source_files"],
