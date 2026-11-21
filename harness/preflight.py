@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import urllib.error
@@ -15,6 +16,15 @@ DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_MODEL = "qwen3-8b-32k"
 DEFAULT_API_KEY = "ollama"
 DEFAULT_TIMEOUT = "300"
+
+BACKENDS = ("claude", "codex", "opencode")
+CHATGPT_BUNDLED_CODEX = (
+    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+)
+CODEX_NOT_FOUND = (
+    "no Codex CLI found: not on PATH and not bundled in ChatGPT.app; "
+    "set CODEX_BIN to the codex binary"
+)
 
 CORRECT_LISP = "(defun add1 (x)\n  (+ x 1))\n"
 BROKEN_LISP = "(defun add1 (x)\n  (+ x 1)\n"
@@ -130,6 +140,89 @@ def model_settings():
     )
 
 
+def run_status_command(command):
+    """Run a login status command; return (result, None) or (None, reason)."""
+    try:
+        result = subprocess.run(
+            command, stdin=subprocess.DEVNULL, capture_output=True, text=True
+        )
+    except OSError as error:
+        return None, f"could not run {command[0]}: {error}"
+    return result, None
+
+
+def no_login_reason(command, result):
+    output = " | ".join((result.stdout + result.stderr).splitlines()) or "no output"
+    return (
+        f"`{' '.join(command)}` does not report a login "
+        f"(exit {result.returncode}): {snippet(output)}"
+    )
+
+
+def check_claude_login(claude):
+    """Return None if `claude auth status` reports a login, else a reason. Sends no prompt."""
+    command = [claude, "auth", "status", "--json"]
+    result, problem = run_status_command(command)
+    if problem:
+        return problem
+    try:
+        status = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        status = None
+    if isinstance(status, dict) and status.get("loggedIn") is True:
+        return None
+    return no_login_reason(command, result)
+
+
+def find_codex():
+    """CODEX_BIN, then `codex` on PATH, then the CLI bundled in ChatGPT.app; None if none."""
+    if "CODEX_BIN" in os.environ:
+        return os.environ["CODEX_BIN"]
+    on_path = shutil.which("codex")
+    if on_path:
+        return on_path
+    if os.access(CHATGPT_BUNDLED_CODEX, os.X_OK):
+        return CHATGPT_BUNDLED_CODEX
+    return None
+
+
+def is_runnable(binary):
+    return shutil.which(binary) is not None
+
+
+def found_backends():
+    """The backends whose CLI is installed, used when no --backend is given."""
+    found = []
+    if is_runnable(os.environ.get("CLAUDE_BIN", "claude")):
+        found.append("claude")
+    codex = find_codex()
+    if codex is not None and is_runnable(codex):
+        found.append("codex")
+    if is_runnable(os.environ.get("OPENCODE_BIN", "opencode")):
+        found.append("opencode")
+    return found
+
+
+def check_codex_login(codex):
+    """Return None if `codex login status` succeeds, else a reason. Sends no prompt."""
+    command = [codex, "login", "status"]
+    result, problem = run_status_command(command)
+    if problem:
+        return problem
+    if result.returncode == 0:
+        return None
+    return no_login_reason(command, result)
+
+
+def check_opencode_model(skip_model):
+    if skip_model:
+        print("SKIP model tool call (skipped by --skip-model)")
+        return True
+    settings = model_settings()
+    label = f"model {settings['model']} at {settings['base_url']} answers with a valid tool call"
+    return report(label, check_tool_call(**settings))
+
+
 def report(label, problem):
     if problem is None:
         print(f"PASS {label}")
@@ -140,12 +233,20 @@ def report(label, problem):
 
 def main(args):
     parser = argparse.ArgumentParser(
-        prog="preflight", description="Check lisp-check and the model before a run."
+        prog="preflight",
+        description="Check lisp-check and each backend before a run.",
     )
     parser.add_argument(
-        "--skip-model", action="store_true", help="do not send a request to the model"
+        "--skip-model", action="store_true", help="opencode: do not send a request to the model"
+    )
+    parser.add_argument(
+        "--backend",
+        action="append",
+        choices=BACKENDS,
+        help="backend to check (repeatable); default: every backend whose CLI is installed",
     )
     options = parser.parse_args(args)
+    backends = options.backend or found_backends()
 
     results = []
     with tempfile.TemporaryDirectory(prefix="preflight-") as tmp:
@@ -160,12 +261,25 @@ def main(args):
             check_lisp_file(run_dir, "broken.lisp", BROKEN_LISP, "FAIL"),
         ))
 
-    if options.skip_model:
-        print("SKIP model tool call (skipped by --skip-model)")
-    else:
-        settings = model_settings()
-        label = f"model {settings['model']} at {settings['base_url']} answers with a valid tool call"
-        results.append(report(label, check_tool_call(**settings)))
+    if not backends:
+        results.append(report(
+            "a backend CLI is installed",
+            "found none of claude, codex, opencode; pass --backend",
+        ))
+
+    if "claude" in backends:
+        claude = os.environ.get("CLAUDE_BIN", "claude")
+        results.append(report(f"Claude CLI {claude} is logged in", check_claude_login(claude)))
+
+    if "codex" in backends:
+        codex = find_codex()
+        if codex is None:
+            results.append(report("Codex CLI is logged in", CODEX_NOT_FOUND))
+        else:
+            results.append(report(f"Codex CLI {codex} is logged in", check_codex_login(codex)))
+
+    if "opencode" in backends:
+        results.append(check_opencode_model(options.skip_model))
 
     ok = all(results)
     print("preflight: OK" if ok else "preflight: FAIL")
