@@ -1,9 +1,16 @@
-"""Running Claude Code isolated from the user's own Claude setup."""
+"""Running Claude Code isolated from the user's own Claude setup and confined to the run's model folder."""
 
+import json
 import os
+from pathlib import Path
 
 DEFAULT_MODEL = "haiku"
 DEFAULT_EFFORT = "low"
+DEFAULT_BUDGET_USD = 5.0
+TOOLS = ("Bash", "Edit", "Read", "Write")
+DISALLOWED_TOOLS = ("Agent", "WebFetch", "WebSearch")
+BUILTIN_PLUGINS = ("cc-plugin-agents-md", "cc-plugin-telemetry", "cc-plugin-privacy",
+                   "cc-plugin-plugin-authoring", "cc-plugin-easel")
 
 
 def find_claude():
@@ -12,16 +19,69 @@ def find_claude():
 
 
 def model_settings(model=None, effort=None):
-    """(model, effort): the given values, else $CLAUDE_MODEL / $CLAUDE_EFFORT, else the defaults."""
+    """(model, effort): the given values, else $CLAUDE_MODEL / $CLAUDE_REASONING_EFFORT, else the defaults."""
     return (model or os.environ.get("CLAUDE_MODEL") or DEFAULT_MODEL,
-            effort or os.environ.get("CLAUDE_EFFORT") or DEFAULT_EFFORT)
+            effort or os.environ.get("CLAUDE_REASONING_EFFORT") or DEFAULT_EFFORT)
 
 
 def isolated_env(base_env, effort):
-    """BASE_ENV with the effort pinned; the env var beats --effort and every settings file."""
-    return {**base_env, "CLAUDE_CODE_EFFORT_LEVEL": effort}
+    """BASE_ENV without the variables a parent Claude Code session exports, with the effort pinned and auto-memory off.
+
+    CLAUDE_CODE_EFFORT_LEVEL beats --effort and every settings file. CLAUDE_CONFIG_DIR is kept: it says where
+    the user's login lives.
+    """
+    env = {key: value for key, value in base_env.items()
+           if not key.startswith("CLAUDE") or key == "CLAUDE_CONFIG_DIR"}
+    return {**env, "CLAUDE_CODE_EFFORT_LEVEL": effort, "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
 
 
-def base_options(model, effort):
+def run_settings(work, round_log_dir, readable, unreadable, docker_socket):
+    """The per-run settings: no memory, hooks or user instructions; file tools and shell confined to WORK.
+
+    Shell commands run in Claude Code's OS sandbox: they can't read UNREADABLE (except the narrower
+    READABLE paths lisp-check needs), write only WORK and ROUND_LOG_DIR, and may reach DOCKER_SOCKET.
+    """
+    home = Path.home()
+    sandbox_network = {"allowUnixSockets": [docker_socket]} if docker_socket else {}
+    return {
+        "autoMemoryEnabled": False,
+        "disableAllHooks": True,
+        "enabledPlugins": {f"{name}@builtin": False for name in BUILTIN_PLUGINS},
+        "claudeMdExcludes": [str(home / ".claude" / "CLAUDE.md"), str(home / ".claude" / "rules" / "**")],
+        "permissions": {
+            "defaultMode": "dontAsk",
+            "allow": [f"Edit(/{work}/**)", "Bash"],
+            "blockReadsOutsideWorkingDirectories": True,
+            "disableBypassPermissionsMode": "disable",
+        },
+        "sandbox": {
+            "enabled": True,
+            "failIfUnavailable": True,
+            "allowUnsandboxedCommands": False,
+            "autoAllowBashIfSandboxed": True,
+            "filesystem": {
+                "denyRead": [str(path) for path in unreadable],
+                "allowRead": [str(work), *(str(path) for path in readable)],
+                "allowWrite": [str(round_log_dir)],
+            },
+            "network": sandbox_network,
+        },
+    }
+
+
+def write_settings(path, settings):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2) + "\n")
+    return path
+
+
+def base_options(model, effort, settings_file):
     """Options shared by the first turn and the resumed turn."""
-    return ["-p", "--output-format", "stream-json", "--verbose", "--model", model, "--effort", effort]
+    return [
+        "-p", "--output-format", "stream-json", "--verbose",
+        "--model", model, "--effort", effort,
+        "--setting-sources", "project", "--settings", str(settings_file),
+        "--strict-mcp-config", "--disable-slash-commands", "--tools", ",".join(TOOLS),
+        "--disallowedTools", ",".join(DISALLOWED_TOOLS),
+        "--permission-mode", "dontAsk",
+    ]

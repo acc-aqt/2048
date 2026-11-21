@@ -82,7 +82,7 @@ def parse_args(argv):
                                          f"{codex.DEFAULT_MODEL}; $CLAUDE_MODEL or {claude.DEFAULT_MODEL})")
     parser.add_argument("--reasoning-effort",
                         help="codex and claude: the reasoning effort (default $CODEX_REASONING_EFFORT or "
-                             f"{codex.DEFAULT_EFFORT}; $CLAUDE_EFFORT or {claude.DEFAULT_EFFORT})")
+                             f"{codex.DEFAULT_EFFORT}; $CLAUDE_REASONING_EFFORT or {claude.DEFAULT_EFFORT})")
     args = parser.parse_args(argv)
 
     if not (TASKS / args.task / "spec.md").is_file():
@@ -211,6 +211,7 @@ class ClaudeBackend:
 
     name = "claude"
     stderr_log = "claude.stderr.log"
+    LISP_CHECK_PARTS = ("bin", "harness")
 
     @staticmethod
     def find_binary():
@@ -220,7 +221,13 @@ class ClaudeBackend:
         self.binary = binary
         self.model, self.effort = claude.model_settings(args.model, args.reasoning_effort)
         self.env = with_lisp_check(claude.isolated_env(os.environ, self.effort), run_folder)
-        self.options = claude.base_options(self.model, self.effort)
+        rounds = round_log(run_folder).parent
+        readable = [REPO, run_folder / "bin", rounds, Path.home() / ".docker"]
+        unreadable = [*(path for path in sorted(REPO.iterdir()) if path.name not in self.LISP_CHECK_PARTS),
+                      DEFAULT_RECORDS, args.records_dir, args.run_root, Path.home()]
+        settings = claude.run_settings(work, rounds, readable, unique(unreadable), codex.docker_socket())
+        settings_file = claude.write_settings(run_folder / "claude" / "settings.json", settings)
+        self.options = claude.base_options(self.model, self.effort, settings_file)
 
     def first_turn(self, message):
         return [self.binary, *self.options, message]
@@ -237,6 +244,10 @@ class ClaudeBackend:
     def result_fields(self, transcript, exit_code):
         return {"backend": self.name, "model": self.model, "reasoning_effort": self.effort,
                 "claude_exit_code": exit_code}
+
+
+def unique(paths):
+    return list(dict.fromkeys(paths))
 
 
 # Every backend has find_binary(), which may raise one of AGENT_NOT_FOUND, and, once built with
