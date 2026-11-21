@@ -7,6 +7,9 @@ from pathlib import Path
 DEFAULT_MODEL = "haiku"
 DEFAULT_EFFORT = "low"
 DEFAULT_BUDGET_USD = 5.0
+USAGE_KEYS = {"input_tokens": "inputTokens", "output_tokens": "outputTokens",
+              "cache_read_input_tokens": "cacheReadInputTokens",
+              "cache_creation_input_tokens": "cacheCreationInputTokens"}
 TOOLS = ("Bash", "Edit", "Read", "Write")
 DISALLOWED_TOOLS = ("Agent", "WebFetch", "WebSearch")
 BUILTIN_PLUGINS = ("cc-plugin-agents-md", "cc-plugin-telemetry", "cc-plugin-privacy",
@@ -85,3 +88,31 @@ def base_options(model, effort, settings_file):
         "--disallowedTools", ",".join(DISALLOWED_TOOLS),
         "--permission-mode", "dontAsk",
     ]
+
+
+def result_events(events):
+    return [event for event in events if event.get("type") == "result"]
+
+
+def budget_exhausted(events):
+    """Whether the last turn in EVENTS stopped because it reached --max-budget-usd."""
+    results = result_events(events)
+    return bool(results) and results[-1].get("subtype") == "error_max_budget_usd"
+
+
+def usage(events):
+    """(token totals, cost in USD) for the whole session, from its last `result` event, or (None, None).
+
+    A resumed session's `modelUsage` and `total_cost_usd` include the earlier turns, while its `usage`
+    covers only the last turn and is zero after a budget stop, so the totals come from `modelUsage`.
+    """
+    results = result_events(events)
+    if not results:
+        return None, None
+    last = results[-1]
+    totals = {}
+    for model_usage in (last.get("modelUsage") or {}).values():
+        for name, key in USAGE_KEYS.items():
+            if isinstance(model_usage.get(key), int):
+                totals[name] = totals.get(name, 0) + model_usage[key]
+    return totals or None, last.get("total_cost_usd")

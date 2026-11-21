@@ -180,5 +180,134 @@ class ClaudeConfinementTest(ClaudeTestCase):
         self.assertEqual(seen["settings"]["sandbox"]["network"], {"allowUnixSockets": [str(socket)]})
 
 
+class ClaudeSetupTest(ClaudeTestCase):
+    def test_with_skills_finds_the_pinned_rules_as_claude_md_in_its_folder(self):
+        self.run_claude(setup="with-skills")
+
+        (seen,) = self.seen()
+        self.assertEqual(seen["files"], ["CLAUDE.md"])
+        self.assertEqual(seen["claude_md"], LISP_RULES.read_text())
+
+    def test_without_skills_never_sees_the_rules(self):
+        self.run_claude(setup="without-skills")
+
+        (seen,) = self.seen()
+        self.assertIsNone(seen["claude_md"])
+        run_folder = Path(seen["cwd"]).parent
+        rules = LISP_RULES.read_text()
+        for path in run_folder.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                self.assertNotIn(rules, path.read_text(errors="replace"), path)
+
+    def test_prompt_is_the_same_as_opencodes(self):
+        self.env["FAKE_OPENCODE_SOLUTION"] = str(WRONG)
+        for setup in ("with-skills", "without-skills"):
+            with self.subTest(setup=setup):
+                self.run_claude(setup=setup, run_number="1")
+                self.run_task(setup=setup, run_number="2")
+
+                claude_prompt = self.seen()[-1]["argv"][-1]
+                opencode_seen = [json.loads(line) for line in
+                                 (Path(self.tmp.name) / "fake-opencode-seen.jsonl").read_text().splitlines()]
+                self.assertEqual(claude_prompt, opencode_seen[-1]["argv"][-1])
+
+
+class ClaudeContinueTest(ClaudeTestCase):
+    def test_no_continue_when_every_file_prints_ok(self):
+        self.run_claude()
+
+        self.assertEqual(len(self.seen()), 1)
+        self.assertFalse(self.result()["continue_sent"])
+
+    def test_resumes_the_same_session_once_with_the_same_settings_when_the_model_stops_early(self):
+        self.env["FAKE_CLAUDE_SCENARIO"] = "stop-early"
+
+        self.run_claude()
+
+        first, second = self.seen()
+        self.assertEqual(second["argv"][-3:], [
+            "--resume", SESSION_ID,
+            "Continue until every file is created and every .lisp file prints OK in lisp-check."])
+        budget = first["argv"].index("--max-budget-usd")
+        self.assertEqual(second["argv"][:budget], first["argv"][:budget])
+        self.assertEqual(second["settings"], first["settings"])
+        result = self.result()
+        self.assertTrue(result["continue_sent"])
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["session_id"], SESSION_ID)
+
+    def test_continue_is_sent_at_most_once(self):
+        self.env["FAKE_CLAUDE_SCENARIO"] = "never-done"
+
+        self.run_claude()
+
+        self.assertEqual(len(self.seen()), 2)
+        self.assertFalse(self.result()["passed"])
+
+
+class ClaudeLimitTest(ClaudeTestCase):
+    def test_hanging_claude_is_killed_at_the_wall_clock_limit(self):
+        self.env["FAKE_CLAUDE_SCENARIO"] = "hang"
+        start = time.monotonic()
+
+        self.run_claude("--timeout", "2")
+
+        self.assertLess(time.monotonic() - start, 60)
+        result = self.result()
+        self.assertEqual(result["limit_hit"], "wall_clock")
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["continue_sent"])
+
+    def test_endless_check_fix_rounds_stop_at_the_round_limit(self):
+        self.env["FAKE_CLAUDE_SCENARIO"] = "endless-checks"
+
+        self.run_claude("--max-rounds", "5")
+
+        result = self.result()
+        self.assertEqual(result["limit_hit"], "rounds")
+        self.assertLess(result["check_fix_rounds"], 10)
+        self.assertFalse(result["passed"])
+
+
+class ClaudeBudgetTest(ClaudeTestCase):
+    def test_each_run_is_capped_at_5_dollars_by_default(self):
+        self.run_claude()
+
+        self.assertEqual(option(self.seen()[0]["argv"], "--max-budget-usd"), "5")
+        self.assertEqual(self.result()["budget_usd"], 5)
+
+    def test_budget_can_be_overridden(self):
+        self.run_claude("--max-budget-usd", "0.5")
+
+        self.assertEqual(option(self.seen()[0]["argv"], "--max-budget-usd"), "0.5")
+        self.assertEqual(self.result()["budget_usd"], 0.5)
+
+    def test_other_backends_reject_the_budget(self):
+        completed = self.run_task("--max-budget-usd", "1")
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("--max-budget-usd is for --backend claude", completed.stderr)
+
+    def test_the_resumed_turn_gets_what_is_left_of_the_budget(self):
+        self.env["FAKE_CLAUDE_SCENARIO"] = "stop-early"
+
+        self.run_claude("--max-budget-usd", "2")
+
+        first, second = self.seen()
+        self.assertEqual(option(first["argv"], "--max-budget-usd"), "2")
+        self.assertEqual(option(second["argv"], "--max-budget-usd"), "1.75")
+
+    def test_budget_stop_is_its_own_limit_and_fails_the_run(self):
+        self.env["FAKE_CLAUDE_SCENARIO"] = "budget"
+
+        self.run_claude()
+
+        self.assertEqual(len(self.seen()), 1)
+        result = self.result()
+        self.assertEqual(result["limit_hit"], "budget")
+        self.assertFalse(result["continue_sent"])
+        self.assertFalse(result["passed"])
+
+
 if __name__ == "__main__":
     unittest.main()

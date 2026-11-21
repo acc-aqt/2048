@@ -83,6 +83,8 @@ def parse_args(argv):
     parser.add_argument("--reasoning-effort",
                         help="codex and claude: the reasoning effort (default $CODEX_REASONING_EFFORT or "
                              f"{codex.DEFAULT_EFFORT}; $CLAUDE_REASONING_EFFORT or {claude.DEFAULT_EFFORT})")
+    parser.add_argument("--max-budget-usd", type=float,
+                        help=f"claude only: the most a run may cost; reaching it fails the run (default {claude.DEFAULT_BUDGET_USD:g})")
     args = parser.parse_args(argv)
 
     if not (TASKS / args.task / "spec.md").is_file():
@@ -96,6 +98,8 @@ def parse_args(argv):
     args.records_dir = Path(args.records_dir).resolve()
     if args.backend == "opencode" and (args.model or args.reasoning_effort):
         parser.error("--model and --reasoning-effort are for --backend codex or claude; OpenCode reads LLM_MODEL")
+    if args.backend != "claude" and args.max_budget_usd is not None:
+        parser.error("--max-budget-usd is for --backend claude")
     return args
 
 
@@ -113,6 +117,10 @@ def prepare_run_folder(run_folder):
     bin_dir.mkdir()
     (bin_dir / "lisp-check").symlink_to(LISP_CHECK)
     return work
+
+
+def transcript_path(run_folder):
+    return run_folder / "transcript.jsonl"
 
 
 def round_log(run_folder):
@@ -161,6 +169,9 @@ class OpenCodeBackend:
     def session_id(self, transcript):
         return first_event_value(transcript, "sessionID")
 
+    def turn_limit(self, transcript):
+        return None
+
     def finish(self, sid):
         if sid:
             export_session(self.binary, sid, self.work, self.env, self.run_folder / "session.json")
@@ -197,6 +208,9 @@ class CodexBackend:
     def session_id(self, transcript):
         return first_event_value(transcript, "thread_id")
 
+    def turn_limit(self, transcript):
+        return None
+
     def finish(self, sid):
         pass
 
@@ -228,22 +242,32 @@ class ClaudeBackend:
         settings = claude.run_settings(work, rounds, readable, unique(unreadable), codex.docker_socket())
         settings_file = claude.write_settings(run_folder / "claude" / "settings.json", settings)
         self.options = claude.base_options(self.model, self.effort, settings_file)
+        self.budget = claude.DEFAULT_BUDGET_USD if args.max_budget_usd is None else args.max_budget_usd
+        self.transcript = transcript_path(run_folder)
+        if setup.rules_file is not None:
+            shutil.copy2(setup.rules_file, work / "CLAUDE.md")
 
     def first_turn(self, message):
-        return [self.binary, *self.options, message]
+        return [self.binary, *self.options, "--max-budget-usd", f"{self.budget:g}", message]
 
     def continue_turn(self, sid, message):
-        return [self.binary, *self.options, "--resume", sid, message]
+        """The budget caps one `claude` process, so the resumed turn gets what the session left of it."""
+        _, cost = claude.usage(json_events(self.transcript))
+        left = max(self.budget - (cost or 0), 0)
+        return [self.binary, *self.options, "--max-budget-usd", f"{round(left, 4):g}", "--resume", sid, message]
 
     def session_id(self, transcript):
         return first_event_value(transcript, "session_id")
+
+    def turn_limit(self, transcript):
+        return "budget" if claude.budget_exhausted(json_events(transcript)) else None
 
     def finish(self, sid):
         pass
 
     def result_fields(self, transcript, exit_code):
         return {"backend": self.name, "model": self.model, "reasoning_effort": self.effort,
-                "claude_exit_code": exit_code}
+                "budget_usd": self.budget, "claude_exit_code": exit_code}
 
 
 def unique(paths):
@@ -252,7 +276,8 @@ def unique(paths):
 
 # Every backend has find_binary(), which may raise one of AGENT_NOT_FOUND, and, once built with
 # (binary, args, run_folder, work, setup): env, stderr_log, first_turn(message),
-# continue_turn(sid, message), session_id(transcript), finish(sid) and result_fields(transcript, exit_code).
+# continue_turn(sid, message), session_id(transcript), turn_limit(transcript) (a limit the agent itself
+# stopped at, or None), finish(sid) and result_fields(transcript, exit_code).
 BACKENDS = {backend.name: backend for backend in (OpenCodeBackend, CodexBackend, ClaudeBackend)}
 AGENT_NOT_FOUND = (codex.CodexNotFound,)
 
@@ -400,7 +425,7 @@ def main(argv):
     run_folder = args.run_root / args.task / args.setup / f"{args.run_number}-{started:%Y%m%dT%H%M%SZ}"
     work = prepare_run_folder(run_folder)
     backend = BACKENDS[args.backend](binary, args, run_folder, work, setup)
-    transcript = run_folder / "transcript.jsonl"
+    transcript = transcript_path(run_folder)
     spec = (task_dir / "spec.md").read_text()
     message = prompt(spec, setup.prompt_note)
     required = task_files(spec)
@@ -411,11 +436,11 @@ def main(argv):
         """One agent turn; the wall-clock limit covers only the time spent in turns."""
         nonlocal model_seconds
         start = time.monotonic()
-        outcome = run_turn(command, work, backend.env, transcript,
-                           run_folder / backend.stderr_log, max(args.timeout - model_seconds, 0),
-                           round_log(run_folder), args.max_rounds)
+        exit_code, limit_hit = run_turn(command, work, backend.env, transcript,
+                                        run_folder / backend.stderr_log, max(args.timeout - model_seconds, 0),
+                                        round_log(run_folder), args.max_rounds)
         model_seconds += time.monotonic() - start
-        return outcome
+        return exit_code, limit_hit or backend.turn_limit(transcript)
 
     exit_code, limit_hit = turn(backend.first_turn(message))
     sid = backend.session_id(transcript)
