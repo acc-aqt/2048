@@ -398,9 +398,10 @@ class LimitTest(RunnerTestCase):
         self.env["FAKE_OPENCODE_SCENARIO"] = "endless-checks"
         start = time.monotonic()
 
-        self.run_task()
+        completed = self.run_task()
 
         self.assertLess(time.monotonic() - start, 120)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         result = self.result()
         self.assertEqual(result["limit_hit"], "rounds")
         self.assertGreaterEqual(result["check_fix_rounds"], 40)
@@ -413,8 +414,9 @@ class LimitTest(RunnerTestCase):
     def test_round_limit_can_be_set(self):
         self.env["FAKE_OPENCODE_SCENARIO"] = "endless-checks"
 
-        self.run_task("--max-rounds", "5")
+        completed = self.run_task("--max-rounds", "5")
 
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         result = self.result()
         self.assertEqual(result["limit_hit"], "rounds")
         self.assertEqual(result["limits"]["max_rounds"], 5)

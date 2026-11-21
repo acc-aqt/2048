@@ -272,8 +272,9 @@ class ClaudeLimitTest(ClaudeTestCase):
     def test_endless_check_fix_rounds_stop_at_the_round_limit(self):
         self.env["FAKE_CLAUDE_SCENARIO"] = "endless-checks"
 
-        self.run_claude("--max-rounds", "5")
+        completed = self.run_claude("--max-rounds", "5")
 
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         result = self.result()
         self.assertEqual(result["limit_hit"], "rounds")
         self.assertLess(result["check_fix_rounds"], 10)
