@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from harness.codex import CodexNotFound, find_codex as locate_codex
+from harness import claude, codex
 
 LISP_CHECK = Path(__file__).resolve().parent.parent / "bin" / "lisp-check"
 
@@ -20,10 +20,6 @@ DEFAULT_API_KEY = "ollama"
 DEFAULT_TIMEOUT = "300"
 
 BACKENDS = ("claude", "codex", "opencode")
-CODEX_NOT_FOUND = (
-    "no Codex CLI found: not on PATH and not bundled in ChatGPT.app; "
-    "set CODEX_BIN to the codex binary"
-)
 
 CORRECT_LISP = "(defun add1 (x)\n  (+ x 1))\n"
 BROKEN_LISP = "(defun add1 (x)\n  (+ x 1)\n"
@@ -158,9 +154,9 @@ def no_login_reason(command, result):
     )
 
 
-def check_claude_login(claude):
+def check_claude_login(binary):
     """Return None if `claude auth status` reports a login, else a reason. Sends no prompt."""
-    command = [claude, "auth", "status", "--json"]
+    command = [binary, "auth", "status", "--json"]
     result, problem = run_status_command(command)
     if problem:
         return problem
@@ -173,34 +169,33 @@ def check_claude_login(claude):
     return no_login_reason(command, result)
 
 
-def find_codex():
-    """The Codex CLI run-task would use, or None if there is none."""
-    try:
-        return locate_codex()
-    except CodexNotFound:
-        return None
-
-
 def is_runnable(binary):
     return shutil.which(binary) is not None
+
+
+def cli_installed(find, not_found):
+    """Whether the CLI that FIND locates, as run-task would, exists and is runnable."""
+    try:
+        return is_runnable(find())
+    except not_found:
+        return False
 
 
 def found_backends():
     """The backends whose CLI is installed, used when no --backend is given."""
     found = []
-    if is_runnable(os.environ.get("CLAUDE_BIN", "claude")):
+    if cli_installed(claude.find_claude, claude.ClaudeNotFound):
         found.append("claude")
-    codex = find_codex()
-    if codex is not None and is_runnable(codex):
+    if cli_installed(codex.find_codex, codex.CodexNotFound):
         found.append("codex")
     if is_runnable(os.environ.get("OPENCODE_BIN", "opencode")):
         found.append("opencode")
     return found
 
 
-def check_codex_login(codex):
+def check_codex_login(binary):
     """Return None if `codex login status` succeeds, else a reason. Sends no prompt."""
-    command = [codex, "login", "status"]
+    command = [binary, "login", "status"]
     result, problem = run_status_command(command)
     if problem:
         return problem
@@ -263,15 +258,20 @@ def main(args):
         ))
 
     if "claude" in backends:
-        claude = os.environ.get("CLAUDE_BIN", "claude")
-        results.append(report(f"Claude CLI {claude} is logged in", check_claude_login(claude)))
+        try:
+            binary = claude.find_claude()
+        except claude.ClaudeNotFound as error:
+            results.append(report("Claude CLI is logged in", str(error)))
+        else:
+            results.append(report(f"Claude CLI {binary} is logged in", check_claude_login(binary)))
 
     if "codex" in backends:
-        codex = find_codex()
-        if codex is None:
-            results.append(report("Codex CLI is logged in", CODEX_NOT_FOUND))
+        try:
+            binary = codex.find_codex()
+        except codex.CodexNotFound as error:
+            results.append(report("Codex CLI is logged in", str(error)))
         else:
-            results.append(report(f"Codex CLI {codex} is logged in", check_codex_login(codex)))
+            results.append(report(f"Codex CLI {binary} is logged in", check_codex_login(binary)))
 
     if "opencode" in backends:
         results.append(check_opencode_model(options.skip_model))
