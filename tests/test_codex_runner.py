@@ -1,10 +1,12 @@
 import json
+import time
 import unittest
 from pathlib import Path
 
 from tests.test_runner import FIXTURES, LISP_RULES, RunnerTestCase, WRONG
 
 FAKE_CODEX = FIXTURES / "fake-codex"
+THREAD_ID = "019a0000-0000-7000-8000-00000000fake"
 
 
 class CodexTestCase(RunnerTestCase):
@@ -175,6 +177,82 @@ class CodexSetupTest(CodexTestCase):
                 opencode_seen = [json.loads(line) for line in
                                  (Path(self.tmp.name) / "fake-opencode-seen.jsonl").read_text().splitlines()]
                 self.assertEqual(codex_prompt, opencode_seen[-1]["argv"][-1])
+
+
+class CodexContinueTest(CodexTestCase):
+    def test_no_continue_when_every_file_prints_ok(self):
+        self.run_codex()
+
+        self.assertEqual(len(self.seen()), 1)
+        self.assertFalse(self.result()["continue_sent"])
+
+    def test_resumes_the_same_thread_once_with_the_same_settings_when_the_model_stops_early(self):
+        self.env["FAKE_CODEX_SCENARIO"] = "stop-early"
+
+        self.run_codex()
+
+        first, second = self.seen()
+        self.assertEqual(second["argv"][:2], ["exec", "resume"])
+        self.assertEqual(second["argv"][2:-2], first["argv"][1:-1])
+        self.assertEqual(second["argv"][-2], THREAD_ID)
+        self.assertEqual(second["argv"][-1],
+                         "Continue until every file is created and every .lisp file prints OK in lisp-check.")
+        self.assertEqual(second["env"]["CODEX_HOME"], first["env"]["CODEX_HOME"])
+        result = self.result()
+        self.assertTrue(result["continue_sent"])
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["session_id"], THREAD_ID)
+
+    def test_continue_is_sent_at_most_once(self):
+        self.env["FAKE_CODEX_SCENARIO"] = "never-done"
+
+        self.run_codex()
+
+        self.assertEqual(len(self.seen()), 2)
+        self.assertFalse(self.result()["passed"])
+
+
+class CodexLimitTest(CodexTestCase):
+    def test_hanging_codex_is_killed_at_the_wall_clock_limit(self):
+        self.env["FAKE_CODEX_SCENARIO"] = "hang"
+        start = time.monotonic()
+
+        self.run_codex("--timeout", "2")
+
+        self.assertLess(time.monotonic() - start, 60)
+        result = self.result()
+        self.assertEqual(result["limit_hit"], "wall_clock")
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["continue_sent"])
+
+    def test_endless_check_fix_rounds_stop_at_the_round_limit(self):
+        self.env["FAKE_CODEX_SCENARIO"] = "endless-checks"
+
+        self.run_codex("--max-rounds", "5")
+
+        result = self.result()
+        self.assertEqual(result["limit_hit"], "rounds")
+        self.assertLess(result["check_fix_rounds"], 10)
+        self.assertFalse(result["passed"])
+
+
+class CodexRecordTest(CodexTestCase):
+    def test_saves_transcript_stderr_round_log_and_sources(self):
+        self.env["FAKE_CODEX_SCENARIO"] = "crash"
+
+        self.run_codex()
+
+        record = self.record_dir()
+        events = [json.loads(line) for line in (record / "transcript.jsonl").read_text().splitlines()]
+        self.assertEqual(events[0], {"type": "thread.started", "thread_id": THREAD_ID})
+        self.assertIn("fake-codex: crashed", (record / "codex.stderr.log").read_text())
+        self.assertEqual(self.result()["codex_exit_code"], 1)
+
+    def test_round_log_is_saved(self):
+        self.run_codex()
+
+        self.assertEqual(len((self.record_dir() / "lisp-check.log").read_text().splitlines()), 3)
+        self.assertEqual(self.result()["check_fix_rounds"], 3)
 
 
 if __name__ == "__main__":
