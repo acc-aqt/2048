@@ -223,6 +223,16 @@ class ResultsTest(unittest.TestCase):
         self.assertIn("AGENTS.md", method)
         self.assertNotIn("OpenCode", method)
 
+    def test_claude_only_report_does_not_mention_opencode_or_local_quantisation(self):
+        self.add_record("with-skills", 1, model="haiku", backend="claude", reasoning_effort="low")
+
+        output = self.results()
+
+        self.assertNotIn("OpenCode", output)
+        self.assertNotIn("Q4_K_M", output)
+        self.assertIn("Claude Code turns", section(output, "Summary per setup"))
+        self.assertIn("agent harness", section(output, "Threats to validity"))
+
     def test_counted_runs_are_sorted_by_run_then_setup(self):
         self.add_record("without-skills", 2)
         self.add_record("with-skills", 1)
