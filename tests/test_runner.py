@@ -452,6 +452,58 @@ class ArgumentTest(RunnerTestCase):
                 self.assertFalse(root.exists())
 
 
+class LeakFlagTest(RunnerTestCase):
+    """Runs every backend with its fake CLI; no request ever reaches a model."""
+
+    def setUp(self):
+        super().setUp()
+        self.use_fake_docker_printing_ok()
+        root = Path(self.tmp.name).resolve()
+        self.claude_seen = root / "fake-claude-seen.jsonl"
+        for key in [k for k in self.env if k.startswith("CLAUDE_")]:
+            del self.env[key]
+        self.env.update(
+            FAKE_OPENCODE_SOLUTION=str(WRONG),
+            CODEX_BIN=str(FIXTURES / "fake-codex"),
+            FAKE_CODEX_SOLUTION=str(WRONG),
+            CLAUDE_BIN=str(FIXTURES / "fake-claude"),
+            FAKE_CLAUDE_RECORD=str(self.claude_seen),
+            FAKE_CLAUDE_SOLUTION=str(WRONG),
+            DOCKER_HOST=f"unix://{root / 'docker.sock'}",
+        )
+
+    def test_transcript_naming_the_repo_hidden_tests_or_reference_is_flagged_but_not_failed(self):
+        for number, output in enumerate((f"cat: {REPO}/README.md: Operation not permitted",
+                                         "ls: tasks/dummy-slide-row/hidden-tests: No such file",
+                                         "cat: ../reference/slide-row.lisp: No such file"), start=1):
+            with self.subTest(output=output):
+                self.env["FAKE_CLAUDE_TOOL_OUTPUT"] = output
+
+                self.run_task("--backend", "claude", run_number=str(number))
+
+                result = self.result(run_number=str(number))
+                self.assertIs(result["suspected_leak"], True)
+                self.assertEqual(result["limit_hit"], None)
+
+    def test_clean_runs_of_every_backend_are_not_flagged(self):
+        for number, backend in enumerate(("claude", "codex", "opencode"), start=1):
+            with self.subTest(backend=backend):
+                records = self.records / backend
+                self.run_task("--backend", backend, "--records-dir", str(records), run_number=str(number))
+
+                result_file = records / "dummy-slide-row" / "without-skills" / str(number) / "result.json"
+                result = json.loads(result_file.read_text())
+                self.assertIs(result["suspected_leak"], False)
+
+    def test_the_repo_path_in_the_runs_own_settings_and_arguments_is_not_a_leak(self):
+        self.run_task("--backend", "claude")
+
+        (seen,) = [json.loads(line) for line in self.claude_seen.read_text().splitlines()]
+        self.assertIn(str(REPO), json.dumps(seen["settings"]))
+        self.assertIn(str(REPO), (Path(seen["cwd"]).parent / "claude" / "settings.json").read_text())
+        self.assertIs(self.result()["suspected_leak"], False)
+
+
 class StopGroupTest(unittest.TestCase):
     def test_a_group_whose_members_already_exited_is_stopped_without_error(self):
         process = subprocess.Popen(["true"], start_new_session=True, stdin=subprocess.DEVNULL)
