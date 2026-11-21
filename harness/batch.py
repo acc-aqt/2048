@@ -29,6 +29,17 @@ def schedule(setups=tuple(SETUPS), runs=COUNTED_RUNS):
     return order
 
 
+def positive_budget(text):
+    """TEXT, unchanged for run-task, if it is a positive number of dollars."""
+    try:
+        valid = float(text) > 0
+    except ValueError:
+        valid = False
+    if not valid:
+        raise argparse.ArgumentTypeError(f"must be a positive number, not {text!r}")
+    return text
+
+
 def parse_args(argv):
     parser = argparse.ArgumentParser(prog="run-batch", description=__doc__)
     parser.add_argument("task", help="folder name under tasks/")
@@ -40,10 +51,12 @@ def parse_args(argv):
     parser.add_argument("--backend", choices=sorted(BACKENDS), default="opencode", help="passed to every run-task call")
     parser.add_argument("--model", help="passed to every run-task call")
     parser.add_argument("--reasoning-effort", help="passed to every run-task call")
-    parser.add_argument("--max-budget-usd", help="passed to every run-task call")
+    parser.add_argument("--max-budget-usd", type=positive_budget, help="claude only: passed to every run-task call")
     args = parser.parse_args(argv)
     if not (TASKS / args.task / "spec.md").is_file():
         parser.error(f"unknown task '{args.task}': no tasks/{args.task}/spec.md")
+    if args.backend != "claude" and args.max_budget_usd is not None:
+        parser.error("--max-budget-usd is for --backend claude")
     return args
 
 
