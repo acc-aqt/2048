@@ -93,6 +93,17 @@ class ClaudeModelTest(ClaudeTestCase):
         self.assertEqual(seen["env"]["CLAUDE_CONFIG_DIR"], "/somewhere/claude-config")
         self.assertEqual(seen["parent_session_vars"], [])
 
+    def test_api_key_provider_and_model_variables_are_dropped_so_the_subscription_login_is_used(self):
+        self.env.update(ANTHROPIC_API_KEY="sk-ant-test", ANTHROPIC_AUTH_TOKEN="token",
+                        ANTHROPIC_BASE_URL="https://proxy.example", ANTHROPIC_MODEL="claude-opus-5-5",
+                        ANTHROPIC_DEFAULT_HAIKU_MODEL="claude-opus-5-5", ANTHROPIC_CUSTOM_HEADERS="X-A: b")
+
+        self.run_claude()
+
+        (seen,) = self.seen()
+        self.assertEqual(seen["anthropic_vars"], [])
+        self.assertEqual(option(seen["argv"], "--model"), "haiku")
+
 
 class ClaudeIsolationTest(ClaudeTestCase):
     def test_runs_hands_off_in_an_empty_git_folder_in_the_run_root(self):

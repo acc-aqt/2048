@@ -84,6 +84,7 @@ def record(args):
         "stdin_is_devnull": stdin_is_devnull(),
         "env": {key: os.environ.get(key) for key in RECORDED_ENV},
         "parent_session_vars": sorted(key for key in os.environ if key in PARENT_SESSION_VARS),
+        "anthropic_vars": sorted(key for key in os.environ if key.startswith("ANTHROPIC_")),
     }
     with open(path, "a") as f:
         f.write(json.dumps(seen) + "\n")
