@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Stand-in for `codex` in tests. Sends nothing to any model.
+
+`exec [OPTIONS] PROMPT` and `exec resume [OPTIONS] SESSION PROMPT`: append what it saw to
+$FAKE_CODEX_RECORD, copy $FAKE_CODEX_SOLUTION into the current folder, run lisp-check on each
+.lisp file and print `codex exec --json` events, ending with `turn.completed` and its usage.
+FAKE_CODEX_SCENARIO changes that:
+  hang            hang forever
+  endless-checks  run `lisp-check package.lisp` forever
+  never-done      write nothing, check nothing, stop
+  stop-early      like never-done, but behave normally when resumed
+  crash           print `thread.started`, then exit 1 before any usage
+"""
+
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+THREAD_ID = "019a0000-0000-7000-8000-00000000fake"
+FIRST_TURN_USAGE = {"input_tokens": 1000, "cached_input_tokens": 400,
+                    "output_tokens": 200, "reasoning_output_tokens": 50}
+RESUMED_TURN_USAGE = {"input_tokens": 3000, "cached_input_tokens": 1000,
+                      "output_tokens": 500, "reasoning_output_tokens": 100}
+RECORDED_ENV = ("CODEX_HOME", "LISP_CHECK_LOG", "PATH")
+
+
+def stdin_is_devnull():
+    stdin, null = os.fstat(0), os.stat(os.devnull)
+    return stat.S_ISCHR(stdin.st_mode) and stdin.st_rdev == null.st_rdev
+
+
+def codex_home_entries():
+    home = Path(os.environ["CODEX_HOME"])
+    return {
+        str(p.relative_to(home)): os.readlink(p) if p.is_symlink() else None
+        for p in sorted(home.rglob("*"))
+    }
+
+
+def record():
+    path = os.environ.get("FAKE_CODEX_RECORD")
+    if not path:
+        return
+    cwd = Path.cwd()
+    files = sorted(
+        str(p.relative_to(cwd)) for p in cwd.rglob("*")
+        if p.relative_to(cwd).parts[0] != ".git"
+    )
+    seen = {
+        "argv": sys.argv[1:],
+        "cwd": str(cwd),
+        "files": files,
+        "agents_md": (cwd / "AGENTS.md").read_text() if (cwd / "AGENTS.md").exists() else None,
+        "stdin_is_devnull": stdin_is_devnull(),
+        "env": {key: os.environ.get(key) for key in RECORDED_ENV},
+        "codex_home": codex_home_entries(),
+    }
+    with open(path, "a") as f:
+        f.write(json.dumps(seen) + "\n")
+
+
+def emit(event_type, **data):
+    print(json.dumps({"type": event_type, **data}), flush=True)
+
+
+def agent_message(text):
+    emit("item.completed", item={"id": "item_0", "type": "agent_message", "text": text})
+
+
+def check_files():
+    for path in sorted(Path.cwd().glob("*.lisp")):
+        args = ["lisp-check"] + (["--test"] if path.name.endswith("tests.lisp") else []) + [path.name]
+        result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        emit("item.completed", item={"id": "item_1", "type": "command_execution",
+                                     "command": " ".join(args), "aggregated_output": result.stdout,
+                                     "exit_code": result.returncode, "status": "completed"})
+
+
+def run(resumed):
+    record()
+    scenario = os.environ.get("FAKE_CODEX_SCENARIO", "")
+    emit("thread.started", thread_id=THREAD_ID)
+    emit("turn.started")
+    usage = RESUMED_TURN_USAGE if resumed else FIRST_TURN_USAGE
+    if scenario == "crash":
+        print("fake-codex: crashed", file=sys.stderr)
+        return 1
+    if scenario == "hang":
+        time.sleep(3600)
+    if scenario == "endless-checks":
+        while True:
+            subprocess.run(["lisp-check", "package.lisp"], stdin=subprocess.DEVNULL, capture_output=True)
+    if scenario == "never-done" or (scenario == "stop-early" and not resumed):
+        agent_message("I stop here.")
+        emit("turn.completed", usage=usage)
+        return 0
+    solution = os.environ.get("FAKE_CODEX_SOLUTION")
+    if solution:
+        for source in sorted(Path(solution).iterdir()):
+            shutil.copy2(source, source.name)
+    check_files()
+    agent_message("Done.")
+    emit("turn.completed", usage=usage)
+    return 0
+
+
+def main(args):
+    if args[:2] == ["exec", "resume"]:
+        return run(resumed=True)
+    if args[:1] == ["exec"]:
+        return run(resumed=False)
+    print(f"fake-codex: unsupported arguments {args}", file=sys.stderr)
+    return 2
+
+
+sys.exit(main(sys.argv[1:]))

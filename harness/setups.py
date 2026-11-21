@@ -1,7 +1,8 @@
 """The experiment setups. A setup decides what the model gets besides the task spec.
 
 The two setups differ only in the rules text: "with-skills" gets the pinned lisp-skills
-rules as always-loaded OpenCode instructions, "without-skills" gets one sentence instead.
+rules as always-loaded instructions (OpenCode's config, or a generated AGENTS.md in the model
+folder for Codex), "without-skills" gets one sentence instead.
 """
 
 from dataclasses import dataclass
