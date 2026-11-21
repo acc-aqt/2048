@@ -200,7 +200,7 @@ class CodexSetupTest(CodexTestCase):
         for setup in ("with-skills", "without-skills"):
             with self.subTest(setup=setup):
                 self.run_codex(setup=setup, run_number="1")
-                self.run_task(setup=setup, run_number="2")
+                self.run_task("--records-dir", str(self.records / "opencode"), setup=setup, run_number="2")
 
                 codex_prompt = self.seen()[-1]["argv"][-1]
                 opencode_seen = [json.loads(line) for line in
@@ -257,8 +257,9 @@ class CodexLimitTest(CodexTestCase):
     def test_endless_check_fix_rounds_stop_at_the_round_limit(self):
         self.env["FAKE_CODEX_SCENARIO"] = "endless-checks"
 
-        self.run_codex("--max-rounds", "5")
+        completed = self.run_codex("--max-rounds", "5")
 
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         result = self.result()
         self.assertEqual(result["limit_hit"], "rounds")
         self.assertLess(result["check_fix_rounds"], 10)

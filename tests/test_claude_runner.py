@@ -93,6 +93,17 @@ class ClaudeModelTest(ClaudeTestCase):
         self.assertEqual(seen["env"]["CLAUDE_CONFIG_DIR"], "/somewhere/claude-config")
         self.assertEqual(seen["parent_session_vars"], [])
 
+    def test_api_key_provider_and_model_variables_are_dropped_so_the_subscription_login_is_used(self):
+        self.env.update(ANTHROPIC_API_KEY="sk-ant-test", ANTHROPIC_AUTH_TOKEN="token",
+                        ANTHROPIC_BASE_URL="https://proxy.example", ANTHROPIC_MODEL="claude-opus-5-5",
+                        ANTHROPIC_DEFAULT_HAIKU_MODEL="claude-opus-5-5", ANTHROPIC_CUSTOM_HEADERS="X-A: b")
+
+        self.run_claude()
+
+        (seen,) = self.seen()
+        self.assertEqual(seen["anthropic_vars"], [])
+        self.assertEqual(option(seen["argv"], "--model"), "haiku")
+
 
 class ClaudeIsolationTest(ClaudeTestCase):
     def test_runs_hands_off_in_an_empty_git_folder_in_the_run_root(self):
@@ -204,7 +215,7 @@ class ClaudeSetupTest(ClaudeTestCase):
         for setup in ("with-skills", "without-skills"):
             with self.subTest(setup=setup):
                 self.run_claude(setup=setup, run_number="1")
-                self.run_task(setup=setup, run_number="2")
+                self.run_task("--records-dir", str(self.records / "opencode"), setup=setup, run_number="2")
 
                 claude_prompt = self.seen()[-1]["argv"][-1]
                 opencode_seen = [json.loads(line) for line in
@@ -261,8 +272,9 @@ class ClaudeLimitTest(ClaudeTestCase):
     def test_endless_check_fix_rounds_stop_at_the_round_limit(self):
         self.env["FAKE_CLAUDE_SCENARIO"] = "endless-checks"
 
-        self.run_claude("--max-rounds", "5")
+        completed = self.run_claude("--max-rounds", "5")
 
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         result = self.result()
         self.assertEqual(result["limit_hit"], "rounds")
         self.assertLess(result["check_fix_rounds"], 10)
@@ -387,38 +399,6 @@ class ClaudeRulesFileTest(ClaudeTestCase):
         filesystem = seen["settings"]["sandbox"]["filesystem"]
         self.assertNotIn(str(Path(seen["cwd"]) / "CLAUDE.md"), filesystem["denyRead"])
         self.assertFalse(any(rule.startswith("Read(") for rule in seen["settings"]["permissions"]["deny"]))
-
-
-class LeakFlagTest(ClaudeTestCase):
-    def test_transcript_naming_the_repo_hidden_tests_or_reference_is_flagged_but_not_failed(self):
-        for number, output in enumerate((f"cat: {REPO}/README.md: Operation not permitted",
-                                         "ls: tasks/dummy-slide-row/hidden-tests: No such file",
-                                         "cat: ../reference/slide-row.lisp: No such file"), start=1):
-            with self.subTest(output=output):
-                self.env["FAKE_CLAUDE_TOOL_OUTPUT"] = output
-
-                self.run_claude(run_number=str(number))
-
-                result = self.result(run_number=str(number))
-                self.assertIs(result["suspected_leak"], True)
-                self.assertEqual(result["limit_hit"], None)
-
-    def test_clean_runs_of_every_backend_are_not_flagged(self):
-        self.env.update(FAKE_OPENCODE_SOLUTION=str(WRONG), CODEX_BIN=str(FIXTURES / "fake-codex"),
-                        FAKE_CODEX_SOLUTION=str(WRONG))
-        for number, backend in enumerate(("claude", "codex", "opencode"), start=1):
-            with self.subTest(backend=backend):
-                self.run_task("--backend", backend, run_number=str(number))
-
-                self.assertIs(self.result(run_number=str(number))["suspected_leak"], False)
-
-    def test_the_repo_path_in_the_runs_own_settings_and_arguments_is_not_a_leak(self):
-        self.run_claude()
-
-        (seen,) = self.seen()
-        self.assertIn(str(REPO), json.dumps(seen["settings"]))
-        self.assertIn(str(REPO), (Path(seen["cwd"]).parent / "claude" / "settings.json").read_text())
-        self.assertIs(self.result()["suspected_leak"], False)
 
 
 class LocatingClaudeTest(ClaudeTestCase):

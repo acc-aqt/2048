@@ -14,6 +14,7 @@ from pathlib import Path
 
 from harness import claude, codex
 from harness.grade import DEFAULT_CHECK_TIMEOUT, all_files_ok, copy_model_files, grade, is_test_file
+from harness.lisp_check import docker_socket
 from harness.opencode import isolated_env, write_run_config
 from harness.preflight import DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL
 from harness.setups import SETUPS
@@ -262,7 +263,7 @@ class ClaudeBackend:
         rounds = round_log(run_folder).parent
         readable, unreadable = confinement(args, run_folder)
         settings = claude.run_settings(work, rounds, [*readable, rounds], unreadable, rules_files(work),
-                                       codex.docker_socket())
+                                       docker_socket())
         settings_file = claude.write_settings(run_folder / "claude" / "settings.json", settings)
         self.options = claude.base_options(self.model, self.effort, settings_file)
         self.budget = claude.DEFAULT_BUDGET_USD if args.max_budget_usd is None else args.max_budget_usd
@@ -304,9 +305,10 @@ AGENT_NOT_FOUND = (codex.CodexNotFound, claude.ClaudeNotFound)
 
 
 def kill_group(process, sig):
+    """Signal PROCESS's group; a group that is gone, or (macOS: EPERM) holds only zombies, is left alone."""
     try:
         os.killpg(process.pid, sig)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
 
 
@@ -412,7 +414,29 @@ def has_record(record_dir):
     return (record_dir / "result.json").is_file()
 
 
-def save_records(record_dir, run_folder, work, grading, result):
+def record_backend(result_file):
+    """The backend that wrote RESULT_FILE; records from before the backend field are OpenCode's."""
+    try:
+        result = json.loads(result_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        result = {}
+    return (result.get("backend") if isinstance(result, dict) else None) or OpenCodeBackend.name
+
+
+def other_backend_problem(records_dir, task, backend):
+    """A reason to refuse BACKEND writing TASK's records into RECORDS_DIR, or None.
+
+    A record is keyed by task, setup and run number only, so one backend's records must not mix with another's.
+    """
+    task_records = records_dir / task
+    others = sorted({record_backend(path) for path in task_records.glob("*/*/result.json")} - {backend})
+    if not others:
+        return None
+    return (f"{task_records} already holds records from backend {', '.join(others)}, not {backend}; "
+            "give each backend its own --records-dir")
+
+
+def save_records(record_dir, run_folder, work, grading, result, stderr_log):
     """Build the record in a hidden sibling folder, then rename it to RECORD_DIR, so a record is complete or absent.
 
     A leftover RECORD_DIR without result.json is renamed to <run>.incomplete-<UTC time> first.
@@ -420,7 +444,7 @@ def save_records(record_dir, run_folder, work, grading, result):
     record_dir.parent.mkdir(parents=True, exist_ok=True)
     partial = record_dir.parent / f".{record_dir.name}.partial-{os.getpid()}"
     partial.mkdir()
-    for name in ("transcript.jsonl", "opencode.stderr.log", "codex.stderr.log", "claude.stderr.log", "session.json"):
+    for name in ("transcript.jsonl", stderr_log, "session.json"):
         if (run_folder / name).exists():
             shutil.copy2(run_folder / name, partial / name)
     if round_log(run_folder).exists():
@@ -438,6 +462,10 @@ def main(argv):
     task_dir = TASKS / args.task
     setup = SETUPS[args.setup]
     record_dir = args.records_dir / args.task / args.setup / str(args.run_number)
+    problem = other_backend_problem(args.records_dir, args.task, args.backend)
+    if problem:
+        print(f"run-task: {problem}", file=sys.stderr)
+        return 1
     if has_record(record_dir):
         print(f"run-task: record {record_dir} already exists; not overwriting it", file=sys.stderr)
         return 1
@@ -503,7 +531,7 @@ def main(argv):
         "session_id": sid,
         "run_folder": str(run_folder),
     }
-    save_records(record_dir, run_folder, work, grading, result)
+    save_records(record_dir, run_folder, work, grading, result, backend.stderr_log)
     print(f"{args.task} {args.setup} #{args.run_number}: "
           f"{'PASS' if result['passed'] else 'FAIL'}, "
           f"hidden tests {result['hidden_tests_passed']}/{result['hidden_tests_total']}, "

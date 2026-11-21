@@ -93,7 +93,7 @@ A flag beats the env var, which beats the default. `--model` and `--reasoning-ef
 
 The Claude effort variable is `CLAUDE_REASONING_EFFORT`, not `CLAUDE_EFFORT`. A parent Claude Code session exports its own variables (`CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_EFFORT` with its own effort), so the runner drops every `CLAUDE*` variable except `CLAUDE_CONFIG_DIR` (where the login lives) from the run's environment. It then pins the effort with `--effort` and `CLAUDE_CODE_EFFORT_LEVEL`, which beats `--effort` and every settings file.
 
-**Before any Claude run or batch, `unset ANTHROPIC_API_KEY`.** The runner passes it through, and Claude Code would then bill that API key instead of using the subscription login. Claude runs also write their session files under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`), like any Claude Code session.
+The runner also drops every `ANTHROPIC_*` variable (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` and the like) from the run's environment, so a Claude run always uses the subscription login, never an API key, another provider or another model. Claude runs also write their session files under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`), like any Claude Code session.
 
 #### Isolation and confinement
 
@@ -149,7 +149,7 @@ If the first turn ends without hitting a limit, the runner checks that every req
 
 Run number 0 is the uncounted practice run (`"counted": false`); counted runs are 1 to 5. The limits may change once, after the practice runs only; write the change and its reason under "Limit changes" below.
 
-Give each backend its own records directory (`runs/claude`, `runs/codex`). A record is keyed by task, setup and run number only, so a second backend writing into the same directory would be refused by run-task or skipped by run-batch.
+Give each backend its own records directory (`runs/claude`, `runs/codex`). A record is keyed by task, setup and run number only, so run-task (and run-batch, before its first run) refuses with exit 1 when the records directory already holds records for the task from another backend; a record without a `backend` field counts as OpenCode's.
 
 `bin/preflight --backend B` (repeatable) checks `lisp-check`, then only the named backends: Claude with `claude auth status --json` and Codex with `codex login status`, neither sending a prompt, OpenCode with the model tool call described under "`bin/preflight`". Without `--backend` it checks every backend whose CLI is installed, so on a Mac with OpenCode installed a bare `bin/preflight` also runs the Ollama check. On the Mac pass `--backend claude --backend codex`.
 
@@ -157,7 +157,6 @@ On the Mac, one practice run per backend and setup:
 
 ```sh
 export PATH="$PWD/bin:$PATH"
-unset ANTHROPIC_API_KEY
 bin/preflight --backend claude --backend codex
 bin/run-task game-2048 with-skills 0    --backend claude --records-dir runs/claude
 bin/run-task game-2048 without-skills 0 --backend claude --records-dir runs/claude
@@ -205,7 +204,6 @@ bin/results TASK --overview RECORDS_DIR... [--output FILE]
 
 ```sh
 export PATH="$PWD/bin:$PATH"
-unset ANTHROPIC_API_KEY
 bin/preflight --backend claude &&
   caffeinate -i bin/run-batch game-2048 --backend claude --records-dir runs/claude 2>&1 | tee -a /tmp/2048-batch-claude.log
 bin/preflight --backend codex &&

@@ -6,6 +6,7 @@ import time
 import unittest
 from pathlib import Path
 
+from harness import runner
 from tests.support import docker_image_available
 
 REPO = Path(__file__).resolve().parent.parent
@@ -252,6 +253,51 @@ class RecordTest(RunnerTestCase):
         self.assertEqual(len(self.seen()), 1)
 
 
+class RecordsBackendGuardTest(RunnerTestCase):
+    def setUp(self):
+        super().setUp()
+        self.use_fake_docker_printing_ok()
+        self.env.update(FAKE_OPENCODE_SOLUTION=str(WRONG), CODEX_BIN=str(FIXTURES / "fake-codex"),
+                        FAKE_CODEX_SOLUTION=str(WRONG), DOCKER_HOST="unix:///nonexistent/docker.sock")
+
+    def make_record(self, result, setup="with-skills", run_number="1"):
+        record = self.record_dir(setup=setup, run_number=run_number)
+        record.mkdir(parents=True)
+        (record / "result.json").write_text(json.dumps(result) + "\n")
+
+    def test_refuses_a_records_dir_holding_another_backends_records_for_the_task(self):
+        self.make_record({"backend": "claude"})
+
+        completed = self.run_task()
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("claude", completed.stderr)
+        self.assertIn("--records-dir", completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
+        self.assertFalse(self.seen_file.exists())
+        self.assertFalse(self.run_root.exists())
+
+    def test_records_without_a_backend_field_count_as_opencode(self):
+        self.make_record({})
+
+        refused = self.run_task("--backend", "codex")
+        allowed = self.run_task()
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("opencode", refused.stderr)
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+    def test_records_of_the_same_backend_or_another_task_are_fine(self):
+        self.make_record({"backend": "codex"})
+        other_task = self.records / "game-2048" / "with-skills" / "1"
+        other_task.mkdir(parents=True)
+        (other_task / "result.json").write_text(json.dumps({"backend": "claude"}) + "\n")
+
+        completed = self.run_task("--backend", "codex")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
 class ContinueTest(RunnerTestCase):
     def setUp(self):
         super().setUp()
@@ -353,9 +399,10 @@ class LimitTest(RunnerTestCase):
         self.env["FAKE_OPENCODE_SCENARIO"] = "endless-checks"
         start = time.monotonic()
 
-        self.run_task()
+        completed = self.run_task()
 
         self.assertLess(time.monotonic() - start, 120)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         result = self.result()
         self.assertEqual(result["limit_hit"], "rounds")
         self.assertGreaterEqual(result["check_fix_rounds"], 40)
@@ -368,8 +415,9 @@ class LimitTest(RunnerTestCase):
     def test_round_limit_can_be_set(self):
         self.env["FAKE_OPENCODE_SCENARIO"] = "endless-checks"
 
-        self.run_task("--max-rounds", "5")
+        completed = self.run_task("--max-rounds", "5")
 
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         result = self.result()
         self.assertEqual(result["limit_hit"], "rounds")
         self.assertEqual(result["limits"]["max_rounds"], 5)
@@ -402,6 +450,68 @@ class ArgumentTest(RunnerTestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("run root", result.stderr)
                 self.assertFalse(root.exists())
+
+
+class LeakFlagTest(RunnerTestCase):
+    """Runs every backend with its fake CLI; no request ever reaches a model."""
+
+    def setUp(self):
+        super().setUp()
+        self.use_fake_docker_printing_ok()
+        root = Path(self.tmp.name).resolve()
+        self.claude_seen = root / "fake-claude-seen.jsonl"
+        for key in [k for k in self.env if k.startswith("CLAUDE_")]:
+            del self.env[key]
+        self.env.update(
+            FAKE_OPENCODE_SOLUTION=str(WRONG),
+            CODEX_BIN=str(FIXTURES / "fake-codex"),
+            FAKE_CODEX_SOLUTION=str(WRONG),
+            CLAUDE_BIN=str(FIXTURES / "fake-claude"),
+            FAKE_CLAUDE_RECORD=str(self.claude_seen),
+            FAKE_CLAUDE_SOLUTION=str(WRONG),
+            DOCKER_HOST=f"unix://{root / 'docker.sock'}",
+        )
+
+    def test_transcript_naming_the_repo_hidden_tests_or_reference_is_flagged_but_not_failed(self):
+        for number, output in enumerate((f"cat: {REPO}/README.md: Operation not permitted",
+                                         "ls: tasks/dummy-slide-row/hidden-tests: No such file",
+                                         "cat: ../reference/slide-row.lisp: No such file"), start=1):
+            with self.subTest(output=output):
+                self.env["FAKE_CLAUDE_TOOL_OUTPUT"] = output
+
+                self.run_task("--backend", "claude", run_number=str(number))
+
+                result = self.result(run_number=str(number))
+                self.assertIs(result["suspected_leak"], True)
+                self.assertEqual(result["limit_hit"], None)
+
+    def test_clean_runs_of_every_backend_are_not_flagged(self):
+        for number, backend in enumerate(("claude", "codex", "opencode"), start=1):
+            with self.subTest(backend=backend):
+                records = self.records / backend
+                self.run_task("--backend", backend, "--records-dir", str(records), run_number=str(number))
+
+                result_file = records / "dummy-slide-row" / "without-skills" / str(number) / "result.json"
+                result = json.loads(result_file.read_text())
+                self.assertIs(result["suspected_leak"], False)
+
+    def test_the_repo_path_in_the_runs_own_settings_and_arguments_is_not_a_leak(self):
+        self.run_task("--backend", "claude")
+
+        (seen,) = [json.loads(line) for line in self.claude_seen.read_text().splitlines()]
+        self.assertIn(str(REPO), json.dumps(seen["settings"]))
+        self.assertIn(str(REPO), (Path(seen["cwd"]).parent / "claude" / "settings.json").read_text())
+        self.assertIs(self.result()["suspected_leak"], False)
+
+
+class StopGroupTest(unittest.TestCase):
+    def test_a_group_whose_members_already_exited_is_stopped_without_error(self):
+        process = subprocess.Popen(["true"], start_new_session=True, stdin=subprocess.DEVNULL)
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+
+        runner.stop_group(process)
+
+        self.assertEqual(process.returncode, 0)
 
 
 @unittest.skipUnless(docker_image_available(), "lisp-skills-allegro image not available")

@@ -18,7 +18,7 @@ RUN_COLUMNS = ["Setup", "Run", "Check-fix rounds", "Hidden tests", "Duration", "
 SUMMARY_COLUMNS = ["Setup", "Counted runs", "Passed", "Median hidden tests", "Median rounds",
                    "Median duration"]
 
-BACKENDS = {
+BACKEND_DESCRIPTIONS = {
     "opencode": {"agent": "OpenCode", "driven": "driven by OpenCode with thinking mode on and a 32k context",
                  "rules": "as always-loaded OpenCode instructions"},
     "codex": {"agent": "Codex CLI", "driven": "driven by the Codex CLI, isolated from the user's Codex config, plugins and bundled skills",
@@ -40,6 +40,15 @@ HOSTED_THREAT = """\
 MIXED_BACKENDS_THREAT = """\
 - **Different agent harnesses.** Rows from different backends differ in model, agent harness, tools and token accounting at once. Compare the two setups within one backend first; a difference between backends is not a model-only comparison. Runs get no agent skills or plugins on any backend, and the only extra text a `with-skills` run gets is the rules file, but each agent's built-in system prompt and tools still differ (Claude Code vs the Codex CLI) and can't be removed.
 """
+
+BACKEND_THREATS = {
+    "codex": """\
+- **Codex shell network.** Codex shell commands have open network access: its sandbox enables the network so `lisp-check` can reach Docker, so a run could download code (web search itself is off).
+""",
+    "claude": """\
+- **Claude's sandbox and tool set.** Claude's shell reaches only the Docker socket, no other network. Claude's tool set is limited to `Bash`, `Edit`, `Read` and `Write` (no `Glob`, `Grep` or `TodoWrite`), so it searches and plans through the shell, unlike a default Claude Code session.
+""",
+}
 
 THREATS = """\
 - **Unreviewed v0.1 lisp-skills advice.** The with-skills setup loads `dist/lisp-rules.md` from lisp-skills v0.1, which nobody on the team has reviewed. A difference between the setups says how this version of the text helped or hurt, not how good Lisp advice could be.
@@ -113,14 +122,6 @@ def run_row(r):
             r["limit_hit"] or "-", "yes" if r["continue_sent"] else "no", "PASS" if r["passed"] else "FAIL"]
 
 
-USAGE_COLUMNS = {"total_tokens": "Median tokens", "cost_usd": "Median cost"}
-
-
-def usage_fields(records):
-    """The optional usage fields that at least one record has a value for."""
-    return [field for field in USAGE_COLUMNS if any(r.get(field) is not None for r in records)]
-
-
 def tokens(value):
     return f"{round(value):,}"
 
@@ -129,10 +130,19 @@ def dollars(value):
     return f"${value:.2f}"
 
 
+USAGE_COLUMNS = {"total_tokens": ("Median tokens", tokens), "cost_usd": ("Median cost", dollars)}
+
+
+def usage_fields(records):
+    """The optional usage fields that at least one record has a value for."""
+    return [field for field in USAGE_COLUMNS if any(r.get(field) is not None for r in records)]
+
+
 def usage_text(field, value):
     if value is None:
         return "n/a"
-    return (tokens if field == "total_tokens" else dollars)(value)
+    _, formatter = USAGE_COLUMNS[field]
+    return formatter(value)
 
 
 def median_usage(runs, field):
@@ -160,7 +170,7 @@ def backend_of(record):
 
 
 def backends(records):
-    return [name for name in BACKENDS if any(backend_of(r) == name for r in records)] or ["opencode"]
+    return [name for name in BACKEND_DESCRIPTIONS if any(backend_of(r) == name for r in records)] or ["opencode"]
 
 
 def effort_text(runs):
@@ -170,7 +180,7 @@ def effort_text(runs):
 
 def model_text(records):
     return "; ".join(
-        f"{joined(r['model'] for r in runs)}{effort_text(runs)}, {BACKENDS[name]['driven']}"
+        f"{joined(r['model'] for r in runs)}{effort_text(runs)}, {BACKEND_DESCRIPTIONS[name]['driven']}"
         for name in backends(records) for runs in [[r for r in records if backend_of(r) == name]])
 
 
@@ -181,19 +191,21 @@ def listing(items):
 def rules_text(records):
     names = backends(records)
     if len(names) == 1:
-        return BACKENDS[names[0]]["rules"]
-    return listing([f"{BACKENDS[name]['rules']} for {BACKENDS[name]['agent']}" for name in names])
+        return BACKEND_DESCRIPTIONS[names[0]]["rules"]
+    return listing([f"{BACKEND_DESCRIPTIONS[name]['rules']} for {BACKEND_DESCRIPTIONS[name]['agent']}"
+                    for name in names])
 
 
 def agents_text(records):
-    return " or ".join(BACKENDS[name]["agent"] for name in backends(records))
+    return " or ".join(BACKEND_DESCRIPTIONS[name]["agent"] for name in backends(records))
 
 
 def threats(records):
     names = backends(records)
     hosted = HOSTED_THREAT if set(names) - {"opencode"} else ""
     mixed = MIXED_BACKENDS_THREAT if len(names) > 1 else ""
-    return (QUANTISATION_THREAT if "opencode" in names else "") + hosted + mixed + THREATS
+    per_backend = "".join(BACKEND_THREATS.get(name, "") for name in names)
+    return (QUANTISATION_THREAT if "opencode" in names else "") + hosted + mixed + per_backend + THREATS
 
 
 def limits_text(records):
@@ -273,7 +285,7 @@ def render(task, records, commit, location):
     expected = len(SETUPS) * len(COUNTED_RUNS)
     fields = usage_fields(counted)
     summaries = [summary_row(setup, [r for r in counted if r["setup"] == setup], fields) for setup in sorted(SETUPS)]
-    summary_columns = SUMMARY_COLUMNS + [USAGE_COLUMNS[field] for field in fields]
+    summary_columns = SUMMARY_COLUMNS + [USAGE_COLUMNS[field][0] for field in fields]
     practice_text = table(RUN_COLUMNS, map(run_row, practice)) if practice else "No practice run recorded."
     example = record_path(location, counted[0]) if counted else f"{location}/{task}/with-skills/1"
     play = f"\n## Play the best game\n\n{play_section(task, counted, location)}" if defines_play(task) else ""

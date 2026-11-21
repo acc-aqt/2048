@@ -38,13 +38,16 @@ def model_settings(model=None, effort=None):
 
 
 def isolated_env(base_env, effort):
-    """BASE_ENV without the variables a parent Claude Code session exports, with the effort pinned and auto-memory off.
+    """BASE_ENV without the variables a parent Claude Code session exports and without any ANTHROPIC_*
+    variable, with the effort pinned and auto-memory off.
 
+    ANTHROPIC_* variables (API key, auth token, base URL, model overrides) would change who is billed,
+    which provider answers or which model runs, so every run uses the subscription login instead.
     CLAUDE_CODE_EFFORT_LEVEL beats --effort and every settings file. CLAUDE_CONFIG_DIR is kept: it says where
     the user's login lives.
     """
     env = {key: value for key, value in base_env.items()
-           if not key.startswith("CLAUDE") or key == "CLAUDE_CONFIG_DIR"}
+           if not key.startswith(("CLAUDE", "ANTHROPIC_")) or key == "CLAUDE_CONFIG_DIR"}
     return {**env, "CLAUDE_CODE_EFFORT_LEVEL": effort, "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
 
 

@@ -11,10 +11,30 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = REPO / "vendor" / "lisp-skills" / "plugins" / "lisp-skills"
 CONTAINER_PLUGIN_DIR = "/opt/lisp-skills"
+DOCKER_QUERY_TIMEOUT = 30
 
 
 def docker_binary():
     return os.environ.get("LISP_CHECK_DOCKER", "docker")
+
+
+def docker_socket():
+    """The Unix socket lisp-check's docker talks to, resolved to its real path, or None."""
+    if os.environ.get("LISP_CHECK_MODE", "docker") != "docker":
+        return None
+    host = os.environ.get("DOCKER_HOST")
+    if not host:
+        try:
+            host = subprocess.run(
+                [docker_binary(), "context", "inspect",
+                 "--format", "{{.Endpoints.docker.Host}}"],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=DOCKER_QUERY_TIMEOUT,
+            ).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+    if not host.startswith("unix://"):
+        return None
+    return os.path.realpath(host.removeprefix("unix://"))
 
 
 def docker_command(args, cwd, name):

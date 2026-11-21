@@ -394,5 +394,36 @@ class ResultsTest(unittest.TestCase):
         self.assertIn("no agent skills", threats)
 
 
+    def test_overview_threats_say_how_shell_network_and_tool_sets_differ(self):
+        claude, codex = self.root / "runs" / "claude", self.root / "runs" / "codex"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_backend_batch(codex, "codex", "gpt-6-luna", cost=None)
+
+        threats = section(self.overview(claude, codex), "Threats to validity")
+
+        self.assertIn("Codex shell commands have open network access", threats)
+        self.assertIn("Claude's shell reaches only the Docker socket", threats)
+        self.assertIn("`Bash`, `Edit`, `Read` and `Write`", threats)
+        self.assertIn("no `Glob`, `Grep` or `TodoWrite`", threats)
+
+    def test_claude_report_threats_name_its_shell_network_and_tool_set(self):
+        self.add_record("with-skills", 1, model="haiku", backend="claude", reasoning_effort="low")
+
+        threats = section(self.results(), "Threats to validity")
+
+        self.assertIn("Claude's shell reaches only the Docker socket", threats)
+        self.assertIn("no `Glob`, `Grep` or `TodoWrite`", threats)
+        self.assertNotIn("Codex shell", threats)
+
+    def test_codex_report_threats_name_its_open_network(self):
+        self.add_record("with-skills", 1, model="gpt-6-luna", backend="codex", reasoning_effort="low")
+
+        threats = section(self.results(), "Threats to validity")
+
+        self.assertIn("Codex shell commands have open network access", threats)
+        self.assertNotIn("Claude's shell", threats)
+        self.assertNotIn("TodoWrite", threats)
+
+
 if __name__ == "__main__":
     unittest.main()

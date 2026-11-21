@@ -2,14 +2,14 @@
 
 import os
 import shutil
-import subprocess
 from pathlib import Path
+
+from harness.lisp_check import docker_socket
 
 DEFAULT_MODEL = "gpt-6-luna"
 DEFAULT_EFFORT = "low"
 BUNDLED_BIN = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
 PERMISSIONS_PROFILE = "harness"
-DOCKER_QUERY_TIMEOUT = 30
 
 
 class CodexNotFound(Exception):
@@ -52,25 +52,6 @@ def isolated_env(codex_home, base_env):
 def toml_table(entries):
     """An inline TOML table; ENTRIES maps keys to values already written as TOML."""
     return "{" + ", ".join(f'"{key}"={value}' for key, value in entries.items()) + "}"
-
-
-def docker_socket():
-    """The Unix socket lisp-check's docker talks to, resolved to its real path, or None."""
-    if os.environ.get("LISP_CHECK_MODE", "docker") != "docker":
-        return None
-    host = os.environ.get("DOCKER_HOST")
-    if not host:
-        try:
-            host = subprocess.run(
-                [os.environ.get("LISP_CHECK_DOCKER", "docker"), "context", "inspect",
-                 "--format", "{{.Endpoints.docker.Host}}"],
-                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=DOCKER_QUERY_TIMEOUT,
-            ).stdout.strip()
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-    if not host.startswith("unix://"):
-        return None
-    return os.path.realpath(host.removeprefix("unix://"))
 
 
 def permission_options(round_log_dir, readable, unreadable):
