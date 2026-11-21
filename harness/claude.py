@@ -48,11 +48,12 @@ def isolated_env(base_env, effort):
     return {**env, "CLAUDE_CODE_EFFORT_LEVEL": effort, "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
 
 
-def run_settings(work, round_log_dir, readable, unreadable, docker_socket):
+def run_settings(work, round_log_dir, readable, unreadable, read_only, docker_socket):
     """The per-run settings: no memory, hooks or user instructions; file tools and shell confined to WORK.
 
     Shell commands run in Claude Code's OS sandbox: they can't read UNREADABLE (except the narrower
-    READABLE paths lisp-check needs), write only WORK and ROUND_LOG_DIR, and may reach DOCKER_SOCKET.
+    READABLE paths lisp-check needs), write only WORK (but not the READ_ONLY files in it) and
+    ROUND_LOG_DIR, and may reach DOCKER_SOCKET. The file tools can't edit READ_ONLY either.
     """
     home = Path.home()
     sandbox_network = {"allowUnixSockets": [docker_socket]} if docker_socket else {}
@@ -64,6 +65,7 @@ def run_settings(work, round_log_dir, readable, unreadable, docker_socket):
         "permissions": {
             "defaultMode": "dontAsk",
             "allow": [f"Edit(/{work}/**)", "Bash"],
+            "deny": [f"Edit(/{path})" for path in read_only],
             "blockReadsOutsideWorkingDirectories": True,
             "disableBypassPermissionsMode": "disable",
         },
@@ -76,6 +78,7 @@ def run_settings(work, round_log_dir, readable, unreadable, docker_socket):
                 "denyRead": [str(path) for path in unreadable],
                 "allowRead": [str(work), *(str(path) for path in readable)],
                 "allowWrite": [str(round_log_dir)],
+                "denyWrite": [str(path) for path in read_only],
             },
             "network": sandbox_network,
         },

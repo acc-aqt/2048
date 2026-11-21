@@ -137,6 +137,12 @@ def with_lisp_check(env, run_folder):
 
 
 LISP_CHECK_PARTS = ("bin", "harness")
+RULES_FILES = ("CLAUDE.md", "AGENTS.md")
+
+
+def rules_files(work):
+    """The files an agent loads its rules from; it may read them but never change them mid-run."""
+    return [work / name for name in RULES_FILES]
 
 
 def confinement(args, run_folder):
@@ -212,8 +218,9 @@ class CodexBackend:
         self.binary = binary
         self.model, self.effort = codex.model_settings(args.model, args.reasoning_effort)
         self.env = with_lisp_check(codex.isolated_env(run_folder / "codex-home", os.environ), run_folder)
+        readable, unreadable = confinement(args, run_folder)
         self.options = codex.exec_options(self.model, self.effort, round_log(run_folder).parent,
-                                          *confinement(args, run_folder))
+                                          [*readable, *rules_files(work)], unreadable)
         if setup.rules_file is not None:
             shutil.copy2(setup.rules_file, work / "AGENTS.md")
 
@@ -254,7 +261,8 @@ class ClaudeBackend:
         self.env = with_lisp_check(claude.isolated_env(os.environ, self.effort), run_folder)
         rounds = round_log(run_folder).parent
         readable, unreadable = confinement(args, run_folder)
-        settings = claude.run_settings(work, rounds, [*readable, rounds], unreadable, codex.docker_socket())
+        settings = claude.run_settings(work, rounds, [*readable, rounds], unreadable, rules_files(work),
+                                       codex.docker_socket())
         settings_file = claude.write_settings(run_folder / "claude" / "settings.json", settings)
         self.options = claude.base_options(self.model, self.effort, settings_file)
         self.budget = claude.DEFAULT_BUDGET_USD if args.max_budget_usd is None else args.max_budget_usd

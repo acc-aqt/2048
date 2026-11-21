@@ -370,6 +370,25 @@ class ClaudeRecordTest(ClaudeTestCase):
         self.assertIsNone(result["cost_usd"])
 
 
+class ClaudeRulesFileTest(ClaudeTestCase):
+    def test_neither_tools_nor_shell_can_change_the_rules_files(self):
+        self.run_claude(setup="with-skills")
+
+        (seen,) = self.seen()
+        work = Path(seen["cwd"])
+        rules_files = [work / "CLAUDE.md", work / "AGENTS.md"]
+        self.assertEqual(seen["settings"]["sandbox"]["filesystem"]["denyWrite"], [str(p) for p in rules_files])
+        self.assertEqual(seen["settings"]["permissions"]["deny"], [f"Edit(/{p})" for p in rules_files])
+
+    def test_the_rules_file_stays_readable(self):
+        self.run_claude(setup="with-skills")
+
+        (seen,) = self.seen()
+        filesystem = seen["settings"]["sandbox"]["filesystem"]
+        self.assertNotIn(str(Path(seen["cwd"]) / "CLAUDE.md"), filesystem["denyRead"])
+        self.assertFalse(any(rule.startswith("Read(") for rule in seen["settings"]["permissions"]["deny"]))
+
+
 class LeakFlagTest(ClaudeTestCase):
     def test_transcript_naming_the_repo_hidden_tests_or_reference_is_flagged_but_not_failed(self):
         for number, output in enumerate((f"cat: {REPO}/README.md: Operation not permitted",
@@ -392,6 +411,14 @@ class LeakFlagTest(ClaudeTestCase):
                 self.run_task("--backend", backend, run_number=str(number))
 
                 self.assertIs(self.result(run_number=str(number))["suspected_leak"], False)
+
+    def test_the_repo_path_in_the_runs_own_settings_and_arguments_is_not_a_leak(self):
+        self.run_claude()
+
+        (seen,) = self.seen()
+        self.assertIn(str(REPO), json.dumps(seen["settings"]))
+        self.assertIn(str(REPO), (Path(seen["cwd"]).parent / "claude" / "settings.json").read_text())
+        self.assertIs(self.result()["suspected_leak"], False)
 
 
 class LocatingClaudeTest(ClaudeTestCase):

@@ -144,6 +144,14 @@ class CodexIsolationTest(CodexTestCase):
         for path in (REPO / "bin", REPO / "harness"):
             self.assertNotIn(str(path), filesystem)
 
+    def test_sandbox_keeps_the_rules_files_read_only(self):
+        self.run_codex(setup="with-skills")
+
+        (seen,) = self.seen()
+        filesystem = sandbox_filesystem(seen["argv"])
+        for name in ("AGENTS.md", "CLAUDE.md"):
+            self.assertEqual(filesystem[str(Path(seen["cwd"]) / name)], "read", name)
+
     def test_sandbox_lets_lisp_check_reach_the_docker_socket(self):
         socket = Path(self.tmp.name).resolve() / "docker.sock"
         self.env["DOCKER_HOST"] = f"unix://{socket}"
