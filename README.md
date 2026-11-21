@@ -1,6 +1,8 @@
 # 2048
 
-Proof of concept: can Qwen3-8B, driven by OpenCode, write a 2048 game in Common Lisp (Allegro CL) using the lisp-skills rules and `lisp-check`? See issue #1.
+Proof of concept: do the lisp-skills rules and `lisp-check` help a weak model write a working 2048 game in Common Lisp (Allegro CL)? See issue #1.
+
+The experiment runs hosted agents on their weakest models at low effort: Codex CLI and Claude Code. Local Qwen3-8B through OpenCode was dropped after it failed a simple Python smoke test; see [ADR 0001](docs/adr/0001-drop-qwen3-8b-use-weakest-hosted-models.md). Whether the OpenCode path stays is not decided yet.
 
 ## Toolchain
 
