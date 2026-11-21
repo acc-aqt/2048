@@ -129,6 +129,22 @@ class BatchTest(unittest.TestCase):
 
         self.assertNotIn(0, [number for _, number in self.runs_started()])
 
+    def test_codex_backend_model_and_effort_reach_every_run(self):
+        codex_seen = Path(self.tmp.name) / "fake-codex-seen.jsonl"
+        self.env.update(CODEX_BIN=str(FIXTURES / "fake-codex"), FAKE_CODEX_RECORD=str(codex_seen),
+                        FAKE_CODEX_SOLUTION=str(WRONG), DOCKER_HOST="unix:///nonexistent/docker.sock")
+
+        completed = self.run_batch("--backend", "codex", "--model", "gpt-other", "--reasoning-effort", "medium")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(len(codex_seen.read_text().splitlines()), 10)
+        self.assertEqual(self.runs_started(), [])
+        results = [json.loads(p.read_text()) for p in self.records.glob(f"{TASK}/*/*/result.json")]
+        self.assertEqual(len(results), 10)
+        for result in results:
+            self.assertEqual((result["backend"], result["model"], result["reasoning_effort"]),
+                             ("codex", "gpt-other", "medium"))
+
 
 if __name__ == "__main__":
     unittest.main()

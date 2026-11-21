@@ -70,12 +70,12 @@ def parse_args(argv):
     parser.add_argument("--records-dir", default=str(DEFAULT_RECORDS),
                         help="where result records go (default: runs/ in the repo)")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
-                        help=f"wall-clock seconds before OpenCode is killed and the run fails (default {DEFAULT_TIMEOUT})")
+                        help=f"wall-clock seconds before the agent is killed and the run fails (default {DEFAULT_TIMEOUT})")
     parser.add_argument("--check-timeout", type=int, default=DEFAULT_CHECK_TIMEOUT,
                         help="seconds before one grading lisp-check is killed and counts as failed "
                              f"(default {DEFAULT_CHECK_TIMEOUT})")
     parser.add_argument("--max-rounds", type=int, default=DEFAULT_MAX_ROUNDS,
-                        help=f"check-fix rounds before OpenCode is killed and the run fails (default {DEFAULT_MAX_ROUNDS})")
+                        help=f"check-fix rounds before the agent is killed and the run fails (default {DEFAULT_MAX_ROUNDS})")
     parser.add_argument("--backend", choices=sorted(BACKENDS), default="opencode",
                         help="the agent that does the run (default opencode)")
     parser.add_argument("--model", help=f"codex only: the model (default $CODEX_MODEL or {codex.DEFAULT_MODEL})")
