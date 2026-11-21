@@ -111,6 +111,21 @@ class ResultsTest(unittest.TestCase):
                          ["2,000", "n/a", "runs/codex"])
         self.assertEqual(table_row(markdown, "codex", "gpt-6-luna", "low", "without-skills")[5], "0/3")
 
+    def test_overview_lists_practice_runs_apart_and_leaves_them_out_of_the_numbers(self):
+        claude = self.root / "runs" / "claude"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_record("with-skills", 0, records=claude, model="haiku", backend="claude",
+                        reasoning_effort="low", rounds=99, total_tokens=9_999_999, cost_usd=99.0)
+
+        output = self.overview(claude)
+
+        self.assertEqual(table_row(section(output, "Overview"), "claude", "haiku", "low", "with-skills")[4:11],
+                         ["3", "3/3", "66/66", "4", "2 min", "2,000", "$1.00"])
+        practice = section(output, "Practice runs (not counted)")
+        self.assertEqual(table_row(practice, "claude", "with-skills", "0")[3:5], ["99", "30/66"])
+        self.assertIn("9,999,999", practice)
+        self.assertIn("$99.00", practice)
+
     def test_one_table_row_per_counted_run(self):
         self.add_full_batch()
 

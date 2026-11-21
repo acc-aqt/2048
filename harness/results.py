@@ -311,15 +311,36 @@ def overview_row(location, backend, setup, runs):
             *summary, location]
 
 
+PRACTICE_COLUMNS = ["Backend"] + RUN_COLUMNS + ["Tokens", "Cost", "Records"]
+
+
+def usage_cell(record, field):
+    value = record.get(field)
+    return "n/a" if value is None else (tokens if field == "total_tokens" else dollars)(value)
+
+
+def practice_row(location, record):
+    return [backend_of(record), *run_row(record), *(usage_cell(record, field) for field in USAGE_COLUMNS),
+            location]
+
+
 def render_overview(task, sources, commit):
     groups = list(overview_groups(sources))
     rows = [overview_row(*group) for group in groups]
+    practice = [practice_row(location, r) for location, _, _, runs in groups for r in runs if not r["counted"]]
+    practice_text = table(PRACTICE_COLUMNS, practice) if practice else "No practice run recorded."
     return f"""\
 # Results overview: {task}
 
 ## Overview
 
 {table(OVERVIEW_COLUMNS, rows)}
+
+Each row covers the counted runs (1 to {COUNTED_RUNS[-1]}) of one backend and setup from the records directory in its last column. Medians are over those runs; "n/a" means the records hold no value (Codex and OpenCode report no cost).
+
+## Practice runs (not counted)
+
+{practice_text}
 """
 
 
