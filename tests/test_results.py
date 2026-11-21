@@ -352,6 +352,47 @@ class ResultsTest(unittest.TestCase):
         self.assertEqual([[c.strip() for c in row] for row in rows],
                          [["with-skills", "1"], ["without-skills", "1"], ["without-skills", "2"]])
 
+    def test_lists_runs_with_a_suspected_leak_for_review(self):
+        self.add_record("with-skills", 1, suspected_leak=False)
+        self.add_record("without-skills", 2, suspected_leak=True)
+        self.add_record("with-skills", 0, suspected_leak=True)
+
+        leaks = section(self.results(), "Suspected leaks")
+
+        self.assertIn("`hidden-tests`", leaks)
+        self.assertIn("runs/game-2048/without-skills/2", leaks)
+        self.assertIn("runs/game-2048/with-skills/0", leaks)
+        self.assertNotIn("with-skills/1", leaks)
+
+    def test_says_when_no_transcript_was_flagged(self):
+        self.add_record("with-skills", 1, suspected_leak=False)
+        self.add_record("without-skills", 1)
+
+        leaks = section(self.results(), "Suspected leaks")
+
+        self.assertIn("No run is flagged", leaks)
+
+    def test_overview_lists_suspected_leaks_with_their_backend(self):
+        claude, codex = self.root / "runs" / "claude", self.root / "runs" / "codex"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_record("with-skills", 4, records=codex, model="gpt-6-luna", backend="codex",
+                        reasoning_effort="low", suspected_leak=True)
+
+        leaks = section(self.overview(claude, codex), "Suspected leaks")
+
+        self.assertIn("codex: `runs/codex/game-2048/with-skills/4`", leaks)
+        self.assertNotIn("runs/claude", leaks)
+
+    def test_overview_threats_say_the_agents_built_in_prompts_and_tools_differ(self):
+        claude, codex = self.root / "runs" / "claude", self.root / "runs" / "codex"
+        self.add_backend_batch(claude, "claude", "haiku", cost=0.5)
+        self.add_backend_batch(codex, "codex", "gpt-6-luna", cost=None)
+
+        threats = section(self.overview(claude, codex), "Threats to validity")
+
+        self.assertIn("built-in system prompt and tools", threats)
+        self.assertIn("no agent skills", threats)
+
 
 if __name__ == "__main__":
     unittest.main()

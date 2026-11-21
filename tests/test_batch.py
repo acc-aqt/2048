@@ -145,6 +145,26 @@ class BatchTest(unittest.TestCase):
             self.assertEqual((result["backend"], result["model"], result["reasoning_effort"]),
                              ("codex", "gpt-other", "medium"))
 
+    def test_claude_backend_model_effort_and_budget_reach_every_run(self):
+        claude_seen = Path(self.tmp.name) / "fake-claude-seen.jsonl"
+        self.env = {k: v for k, v in self.env.items() if not k.startswith("CLAUDE")}
+        self.env.update(CLAUDE_BIN=str(FIXTURES / "fake-claude"), FAKE_CLAUDE_RECORD=str(claude_seen),
+                        FAKE_CLAUDE_SOLUTION=str(WRONG), DOCKER_HOST="unix:///nonexistent/docker.sock")
+
+        completed = self.run_batch("--backend", "claude", "--model", "sonnet", "--reasoning-effort", "medium",
+                                   "--max-budget-usd", "2.5")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        seen = [json.loads(line) for line in claude_seen.read_text().splitlines()]
+        self.assertEqual(len(seen), 10)
+        for argv in (s["argv"] for s in seen):
+            self.assertEqual(argv[argv.index("--max-budget-usd") + 1], "2.5")
+        results = [json.loads(p.read_text()) for p in self.records.glob(f"{TASK}/*/*/result.json")]
+        self.assertEqual(len(results), 10)
+        for result in results:
+            self.assertEqual((result["backend"], result["model"], result["reasoning_effort"], result["budget_usd"]),
+                             ("claude", "sonnet", "medium", 2.5))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -73,12 +73,14 @@ def docker_socket():
     return os.path.realpath(host.removeprefix("unix://"))
 
 
-def permission_options(round_log_dir):
-    """A sandbox profile: read everywhere, write only the workspace and ROUND_LOG_DIR, reach docker's socket.
+def permission_options(round_log_dir, readable, unreadable):
+    """A sandbox profile: read everywhere but UNREADABLE (except the narrower READABLE), write only the
+    workspace and ROUND_LOG_DIR, reach docker's socket.
 
     The plain workspace-write sandbox blocks the docker socket, so lisp-check could not run.
     """
-    filesystem = {":root": '"read"', ":project_roots": '"write"', str(round_log_dir): '"write"'}
+    filesystem = {":root": '"read"', ":project_roots": '"write"', str(round_log_dir): '"write"',
+                  **{str(path): '"none"' for path in unreadable}, **{str(path): '"read"' for path in readable}}
     socket = docker_socket()
     network = ({"enabled": "true", "unix_sockets": toml_table({socket: '"allow"'})} if socket
                else {"enabled": "false"})
@@ -104,12 +106,12 @@ def usage(events):
     return totals, totals.get("input_tokens", 0) + totals.get("output_tokens", 0)
 
 
-def exec_options(model, effort, round_log_dir):
+def exec_options(model, effort, round_log_dir, readable, unreadable):
     """Options shared by `codex exec` and `codex exec resume`."""
     return [
         "--json", "--ignore-user-config", "--ignore-rules", "--disable", "multi_agent",
         "-m", model, "-c", f'model_reasoning_effort="{effort}"',
         "-c", "features.plugins=false", "-c", "skills.include_instructions=false",
         "-c", 'web_search="disabled"', "-c", 'approval_policy="never"',
-        *permission_options(round_log_dir),
+        *permission_options(round_log_dir, readable, unreadable),
     ]

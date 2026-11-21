@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness import codex
+from harness import claude, codex
 from harness.grade import DEFAULT_CHECK_TIMEOUT, all_files_ok, copy_model_files, grade, is_test_file
 from harness.opencode import isolated_env, write_run_config
 from harness.preflight import DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL
@@ -37,6 +37,7 @@ Create these files directly in the current folder, not in a subfolder: {files}. 
 {spec}
 {note}
 """
+LEAK_MARKERS = (str(REPO), "hidden-tests", "reference/")
 CONTINUE_MESSAGE = "Continue until every file is created and every .lisp file prints OK in lisp-check."
 SPEC_FILE_ROW =re.compile(r"^\| `([\w.-]+\.(?:asd|lisp))` \|", re.MULTILINE)
 
@@ -78,9 +79,13 @@ def parse_args(argv):
                         help=f"check-fix rounds before the agent is killed and the run fails (default {DEFAULT_MAX_ROUNDS})")
     parser.add_argument("--backend", choices=sorted(BACKENDS), default="opencode",
                         help="the agent that does the run (default opencode)")
-    parser.add_argument("--model", help=f"codex only: the model (default $CODEX_MODEL or {codex.DEFAULT_MODEL})")
+    parser.add_argument("--model", help="codex and claude: the model (default $CODEX_MODEL or "
+                                         f"{codex.DEFAULT_MODEL}; $CLAUDE_MODEL or {claude.DEFAULT_MODEL})")
     parser.add_argument("--reasoning-effort",
-                        help=f"codex only: the reasoning effort (default $CODEX_REASONING_EFFORT or {codex.DEFAULT_EFFORT})")
+                        help="codex and claude: the reasoning effort (default $CODEX_REASONING_EFFORT or "
+                             f"{codex.DEFAULT_EFFORT}; $CLAUDE_REASONING_EFFORT or {claude.DEFAULT_EFFORT})")
+    parser.add_argument("--max-budget-usd", type=float,
+                        help=f"claude only: the most a run may cost; reaching it fails the run (default {claude.DEFAULT_BUDGET_USD:g})")
     args = parser.parse_args(argv)
 
     if not (TASKS / args.task / "spec.md").is_file():
@@ -93,7 +98,9 @@ def parse_args(argv):
             parser.error(f"run root {args.run_root} must be outside {outside}")
     args.records_dir = Path(args.records_dir).resolve()
     if args.backend == "opencode" and (args.model or args.reasoning_effort):
-        parser.error("--model and --reasoning-effort are for --backend codex; OpenCode reads LLM_MODEL")
+        parser.error("--model and --reasoning-effort are for --backend codex or claude; OpenCode reads LLM_MODEL")
+    if args.backend != "claude" and args.max_budget_usd is not None:
+        parser.error("--max-budget-usd is for --backend claude")
     return args
 
 
@@ -113,6 +120,10 @@ def prepare_run_folder(run_folder):
     return work
 
 
+def transcript_path(run_folder):
+    return run_folder / "transcript.jsonl"
+
+
 def round_log(run_folder):
     """The log with one line per lisp-check the model runs; its folder holds nothing else."""
     return run_folder / "rounds" / "lisp-check.log"
@@ -123,6 +134,28 @@ def with_lisp_check(env, run_folder):
     env["PATH"] = f"{run_folder / 'bin'}{os.pathsep}{env.get('PATH', '')}"
     env["LISP_CHECK_LOG"] = str(round_log(run_folder))
     return env
+
+
+LISP_CHECK_PARTS = ("bin", "harness")
+RULES_FILES = ("CLAUDE.md", "AGENTS.md")
+
+
+def rules_files(work):
+    """The files an agent loads its rules from; it may read them but never change them mid-run."""
+    return [work / name for name in RULES_FILES]
+
+
+def confinement(args, run_folder):
+    """(readable, unreadable): paths for an agent's sandboxed shell.
+
+    Unreadable: $HOME, the run root (other runs), the records directories and every repo entry but
+    the lisp-check wrapper's bin/ and harness/. Readable, as narrower exceptions: the repo folder
+    itself (Python lists it to import harness), the run's bin/ and docker's client config.
+    """
+    readable = [REPO, run_folder / "bin", Path.home() / ".docker"]
+    unreadable = [*(path for path in sorted(REPO.iterdir()) if path.name not in LISP_CHECK_PARTS),
+                  DEFAULT_RECORDS, args.records_dir, args.run_root, Path.home()]
+    return readable, list(dict.fromkeys(unreadable))
 
 
 def opencode_env(run_folder, setup):
@@ -159,6 +192,9 @@ class OpenCodeBackend:
     def session_id(self, transcript):
         return first_event_value(transcript, "sessionID")
 
+    def turn_limit(self, transcript):
+        return None
+
     def finish(self, sid):
         if sid:
             export_session(self.binary, sid, self.work, self.env, self.run_folder / "session.json")
@@ -182,7 +218,9 @@ class CodexBackend:
         self.binary = binary
         self.model, self.effort = codex.model_settings(args.model, args.reasoning_effort)
         self.env = with_lisp_check(codex.isolated_env(run_folder / "codex-home", os.environ), run_folder)
-        self.options = codex.exec_options(self.model, self.effort, round_log(run_folder).parent)
+        readable, unreadable = confinement(args, run_folder)
+        self.options = codex.exec_options(self.model, self.effort, round_log(run_folder).parent,
+                                          [*readable, *rules_files(work)], unreadable)
         if setup.rules_file is not None:
             shutil.copy2(setup.rules_file, work / "AGENTS.md")
 
@@ -195,6 +233,9 @@ class CodexBackend:
     def session_id(self, transcript):
         return first_event_value(transcript, "thread_id")
 
+    def turn_limit(self, transcript):
+        return None
+
     def finish(self, sid):
         pass
 
@@ -204,11 +245,62 @@ class CodexBackend:
                 "codex_exit_code": exit_code, "usage": usage, "total_tokens": total_tokens, "cost_usd": None}
 
 
+class ClaudeBackend:
+    """`claude -p` turns; the continue message resumes the same session with `--resume`."""
+
+    name = "claude"
+    stderr_log = "claude.stderr.log"
+
+    @staticmethod
+    def find_binary():
+        return claude.find_claude()
+
+    def __init__(self, binary, args, run_folder, work, setup):
+        self.binary = binary
+        self.model, self.effort = claude.model_settings(args.model, args.reasoning_effort)
+        self.env = with_lisp_check(claude.isolated_env(os.environ, self.effort), run_folder)
+        rounds = round_log(run_folder).parent
+        readable, unreadable = confinement(args, run_folder)
+        settings = claude.run_settings(work, rounds, [*readable, rounds], unreadable, rules_files(work),
+                                       codex.docker_socket())
+        settings_file = claude.write_settings(run_folder / "claude" / "settings.json", settings)
+        self.options = claude.base_options(self.model, self.effort, settings_file)
+        self.budget = claude.DEFAULT_BUDGET_USD if args.max_budget_usd is None else args.max_budget_usd
+        self.transcript = transcript_path(run_folder)
+        if setup.rules_file is not None:
+            shutil.copy2(setup.rules_file, work / "CLAUDE.md")
+
+    def first_turn(self, message):
+        return [self.binary, *self.options, "--max-budget-usd", f"{self.budget:g}", message]
+
+    def continue_turn(self, sid, message):
+        """The budget caps one `claude` process, so the resumed turn gets what the session left of it."""
+        _, cost = claude.usage(json_events(self.transcript))
+        left = max(self.budget - (cost or 0), 0)
+        return [self.binary, *self.options, "--max-budget-usd", f"{round(left, 4):g}", "--resume", sid, message]
+
+    def session_id(self, transcript):
+        return first_event_value(transcript, "session_id")
+
+    def turn_limit(self, transcript):
+        return "budget" if claude.budget_exhausted(json_events(transcript)) else None
+
+    def finish(self, sid):
+        pass
+
+    def result_fields(self, transcript, exit_code):
+        usage, cost = claude.usage(json_events(transcript))
+        return {"backend": self.name, "model": self.model, "reasoning_effort": self.effort,
+                "budget_usd": self.budget, "claude_exit_code": exit_code, "usage": usage,
+                "total_tokens": sum(usage.values()) if usage else None, "cost_usd": cost}
+
+
 # Every backend has find_binary(), which may raise one of AGENT_NOT_FOUND, and, once built with
 # (binary, args, run_folder, work, setup): env, stderr_log, first_turn(message),
-# continue_turn(sid, message), session_id(transcript), finish(sid) and result_fields(transcript, exit_code).
-BACKENDS = {backend.name: backend for backend in (OpenCodeBackend, CodexBackend)}
-AGENT_NOT_FOUND = (codex.CodexNotFound,)
+# continue_turn(sid, message), session_id(transcript), turn_limit(transcript) (a limit the agent itself
+# stopped at, or None), finish(sid) and result_fields(transcript, exit_code).
+BACKENDS = {backend.name: backend for backend in (OpenCodeBackend, CodexBackend, ClaudeBackend)}
+AGENT_NOT_FOUND = (codex.CodexNotFound, claude.ClaudeNotFound)
 
 
 def kill_group(process, sig):
@@ -305,6 +397,12 @@ def export_session(opencode, sid, work, env, target):
             pass
 
 
+def suspected_leak(transcript):
+    """Whether TRANSCRIPT names the repo, the hidden tests or the reference solution; flagged for review, not failed."""
+    text = transcript.read_text(errors="replace") if transcript.exists() else ""
+    return any(marker in text for marker in LEAK_MARKERS)
+
+
 def count_rounds(log):
     return len(log.read_text().splitlines()) if log.exists() else 0
 
@@ -322,7 +420,7 @@ def save_records(record_dir, run_folder, work, grading, result):
     record_dir.parent.mkdir(parents=True, exist_ok=True)
     partial = record_dir.parent / f".{record_dir.name}.partial-{os.getpid()}"
     partial.mkdir()
-    for name in ("transcript.jsonl", "opencode.stderr.log", "codex.stderr.log", "session.json"):
+    for name in ("transcript.jsonl", "opencode.stderr.log", "codex.stderr.log", "claude.stderr.log", "session.json"):
         if (run_folder / name).exists():
             shutil.copy2(run_folder / name, partial / name)
     if round_log(run_folder).exists():
@@ -354,7 +452,7 @@ def main(argv):
     run_folder = args.run_root / args.task / args.setup / f"{args.run_number}-{started:%Y%m%dT%H%M%SZ}"
     work = prepare_run_folder(run_folder)
     backend = BACKENDS[args.backend](binary, args, run_folder, work, setup)
-    transcript = run_folder / "transcript.jsonl"
+    transcript = transcript_path(run_folder)
     spec = (task_dir / "spec.md").read_text()
     message = prompt(spec, setup.prompt_note)
     required = task_files(spec)
@@ -365,11 +463,11 @@ def main(argv):
         """One agent turn; the wall-clock limit covers only the time spent in turns."""
         nonlocal model_seconds
         start = time.monotonic()
-        outcome = run_turn(command, work, backend.env, transcript,
-                           run_folder / backend.stderr_log, max(args.timeout - model_seconds, 0),
-                           round_log(run_folder), args.max_rounds)
+        exit_code, limit_hit = run_turn(command, work, backend.env, transcript,
+                                        run_folder / backend.stderr_log, max(args.timeout - model_seconds, 0),
+                                        round_log(run_folder), args.max_rounds)
         model_seconds += time.monotonic() - start
-        return outcome
+        return exit_code, limit_hit or backend.turn_limit(transcript)
 
     exit_code, limit_hit = turn(backend.first_turn(message))
     sid = backend.session_id(transcript)
@@ -401,6 +499,7 @@ def main(argv):
         "source_files": grading["source_files"],
         "skipped_files": grading["skipped_files"],
         "passed": grading["passed"] and not limit_hit,
+        "suspected_leak": suspected_leak(transcript),
         "session_id": sid,
         "run_folder": str(run_folder),
     }

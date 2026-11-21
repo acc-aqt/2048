@@ -24,7 +24,8 @@ BACKENDS = {
     "codex": {"agent": "Codex CLI", "driven": "driven by the Codex CLI, isolated from the user's Codex config, plugins and bundled skills",
               "rules": "as a generated `AGENTS.md` in the model folder"},
     "claude": {"agent": "Claude Code",
-               "driven": "driven by Claude Code, isolated from the user's `CLAUDE.md`, plugins and memory, with no subagents or web tools",
+               "driven": ("driven by Claude Code, isolated from the user's `CLAUDE.md`, plugins and memory, with no skills, "
+                          "subagents or web tools, its file tools and sandboxed shell confined to the model folder"),
                "rules": "as a generated `CLAUDE.md` in the model folder"},
 }
 
@@ -37,7 +38,7 @@ HOSTED_THREAT = """\
 """
 
 MIXED_BACKENDS_THREAT = """\
-- **Different agent harnesses.** Rows from different backends differ in model, agent harness, tools and token accounting at once. Compare the two setups within one backend first; a difference between backends is not a model-only comparison.
+- **Different agent harnesses.** Rows from different backends differ in model, agent harness, tools and token accounting at once. Compare the two setups within one backend first; a difference between backends is not a model-only comparison. Runs get no agent skills or plugins on any backend, and the only extra text a `with-skills` run gets is the rules file, but each agent's built-in system prompt and tools still differ (Claude Code vs the Codex CLI) and can't be removed.
 """
 
 THREATS = """\
@@ -216,6 +217,18 @@ def method(task, records, commit, locations):
 """
 
 
+def leaks_section(flagged):
+    """FLAGGED: (label, record path) of every run whose transcript names the repo, hidden tests or reference."""
+    if not flagged:
+        return "No run is flagged: no transcript names the repo, `hidden-tests` or `reference/`.\n"
+    items = "\n".join(f"- {label}`{path}`" for label, path in flagged)
+    return f"""\
+These runs' transcripts name the repo, `hidden-tests` or `reference/`, so the model may have looked for the hidden tests or the reference solution. Their results stand as recorded; review each transcript before trusting it:
+
+{items}
+"""
+
+
 def play_section(task, counted, location):
     passing = [r for r in counted if r["passed"]]
     if not passing:
@@ -283,6 +296,9 @@ Medians are over the counted runs of each setup. Durations are the time spent in
 
 {practice_text}
 
+## Suspected leaks
+
+{leaks_section([("", record_path(location, r)) for r in records if r.get("suspected_leak")])}
 ## Method
 
 {method(task, records, commit, [location])}
@@ -341,6 +357,8 @@ def render_overview(task, sources, commit):
     rows = [overview_row(*group) for group in groups]
     practice = [practice_row(location, r) for location, _, _, runs in groups for r in runs if not r["counted"]]
     practice_text = table(PRACTICE_COLUMNS, practice) if practice else "No practice run recorded."
+    flagged = [(f"{backend}: ", record_path(location, r))
+               for location, backend, _, runs in groups for r in runs if r.get("suspected_leak")]
     return f"""\
 # Results overview: {task}
 
@@ -354,6 +372,9 @@ Each row covers the counted runs (1 to {COUNTED_RUNS[-1]}) of one backend and se
 
 {practice_text}
 
+## Suspected leaks
+
+{leaks_section(flagged)}
 ## Method
 
 {method(task, records, commit, [location for location, _ in sources])}

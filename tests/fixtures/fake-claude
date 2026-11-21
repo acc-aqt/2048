@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Stand-in for `claude` in tests. Sends nothing to any model.
+
+`-p [OPTIONS] PROMPT` and `-p [OPTIONS] --resume SESSION PROMPT`: append what it saw to
+$FAKE_CLAUDE_RECORD, copy $FAKE_CLAUDE_SOLUTION into the current folder, run lisp-check on each
+.lisp file and print `claude -p --output-format stream-json` events, ending with a `result`
+event that carries usage and cost. FAKE_CLAUDE_SCENARIO changes that:
+  hang            hang forever
+  endless-checks  run `lisp-check package.lisp` forever
+  never-done      write nothing, check nothing, stop
+  stop-early      like never-done, but behave normally when resumed
+  crash           print the init event, then exit 1 before any result
+  budget          stop with the budget-exceeded result and exit 1, write nothing
+FAKE_CLAUDE_TOOL_OUTPUT, if set, is printed as one more tool result before the files are written.
+"""
+
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+SESSION_ID = "6f1c2d3e-0000-4000-8000-00000000fake"
+# Like Claude Code: `usage` covers only this turn; `modelUsage` and `total_cost_usd` add up the whole
+# session, the resumed turn included. A budget stop reports zero `usage` but full `modelUsage`.
+FIRST_TURN = {"usage": {"input_tokens": 100, "cache_creation_input_tokens": 2000,
+                        "cache_read_input_tokens": 5000, "output_tokens": 300,
+                        "server_tool_use": {"web_search_requests": 0}, "service_tier": "standard"},
+              "modelUsage": {"claude-haiku-5-5": {"inputTokens": 100, "outputTokens": 300,
+                                                  "cacheReadInputTokens": 5000, "cacheCreationInputTokens": 2000,
+                                                  "webSearchRequests": 0, "costUSD": 0.25, "contextWindow": 1000000}},
+              "total_cost_usd": 0.25}
+RESUMED_TURN = {"usage": {"input_tokens": 50, "cache_creation_input_tokens": 1000,
+                          "cache_read_input_tokens": 8000, "output_tokens": 200,
+                          "server_tool_use": {"web_search_requests": 0}, "service_tier": "standard"},
+                "modelUsage": {"claude-haiku-5-5": {"inputTokens": 150, "outputTokens": 500,
+                                                    "cacheReadInputTokens": 13000, "cacheCreationInputTokens": 3000,
+                                                    "webSearchRequests": 0, "costUSD": 0.7, "contextWindow": 1000000},
+                               "claude-sonnet-5": {"inputTokens": 10, "outputTokens": 20,
+                                                   "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+                                                   "webSearchRequests": 0, "costUSD": 0.05, "contextWindow": 1000000}},
+                "total_cost_usd": 0.75}
+RECORDED_ENV = ("CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CONFIG_DIR",
+                "LISP_CHECK_LOG", "PATH")
+
+
+PARENT_SESSION_VARS = ("CLAUDECODE", "CLAUDE_EFFORT", "CLAUDE_CODE_SESSION_ID")
+
+
+def stdin_is_devnull():
+    stdin, null = os.fstat(0), os.stat(os.devnull)
+    return stat.S_ISCHR(stdin.st_mode) and stdin.st_rdev == null.st_rdev
+
+
+def option(args, name):
+    return args[args.index(name) + 1] if name in args else None
+
+
+def settings(args):
+    value = option(args, "--settings")
+    if value is None:
+        return None
+    return json.loads(value if value.lstrip().startswith("{") else Path(value).read_text())
+
+
+def record(args):
+    path = os.environ.get("FAKE_CLAUDE_RECORD")
+    if not path:
+        return
+    cwd = Path.cwd()
+    files = sorted(
+        str(p.relative_to(cwd)) for p in cwd.rglob("*")
+        if p.relative_to(cwd).parts[0] != ".git"
+    )
+    seen = {
+        "argv": args,
+        "cwd": str(cwd),
+        "files": files,
+        "claude_md": (cwd / "CLAUDE.md").read_text() if (cwd / "CLAUDE.md").exists() else None,
+        "settings": settings(args),
+        "stdin_is_devnull": stdin_is_devnull(),
+        "env": {key: os.environ.get(key) for key in RECORDED_ENV},
+        "parent_session_vars": sorted(key for key in os.environ if key in PARENT_SESSION_VARS),
+    }
+    with open(path, "a") as f:
+        f.write(json.dumps(seen) + "\n")
+
+
+def emit(event_type, **data):
+    print(json.dumps({"type": event_type, **data}), flush=True)
+
+
+def assistant_text(text):
+    emit("assistant", message={"role": "assistant", "content": [{"type": "text", "text": text}]},
+         session_id=SESSION_ID)
+
+
+def tool_result(text):
+    emit("user", message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_fake",
+                                                       "content": text}]}, session_id=SESSION_ID)
+
+
+def result(turn, subtype="success"):
+    emit("result", subtype=subtype, is_error=subtype != "success", session_id=SESSION_ID, num_turns=3,
+         result="Done.", usage=turn["usage"], modelUsage=turn["modelUsage"], total_cost_usd=turn["total_cost_usd"])
+
+
+def budget_stop(turn):
+    zero = {key: 0 if isinstance(value, int) else value for key, value in turn["usage"].items()}
+    emit("result", subtype="error_max_budget_usd", is_error=True, session_id=SESSION_ID, num_turns=1,
+         terminal_reason="budget_exhausted", errors=["Reached maximum budget"], usage=zero,
+         modelUsage=turn["modelUsage"], total_cost_usd=turn["total_cost_usd"])
+
+
+def check_files():
+    for path in sorted(Path.cwd().glob("*.lisp")):
+        args = ["lisp-check"] + (["--test"] if path.name.endswith("tests.lisp") else []) + [path.name]
+        completed = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        tool_result(completed.stdout)
+
+
+def main(args):
+    if args[:1] != ["-p"]:
+        print(f"fake-claude: unsupported arguments {args}", file=sys.stderr)
+        return 2
+    record(args)
+    resumed = "--resume" in args
+    turn = RESUMED_TURN if resumed else FIRST_TURN
+    scenario = os.environ.get("FAKE_CLAUDE_SCENARIO", "")
+    emit("system", subtype="init", session_id=SESSION_ID, cwd=str(Path.cwd()), model=option(args, "--model"))
+    if scenario == "crash":
+        print("fake-claude: crashed", file=sys.stderr)
+        return 1
+    if scenario == "hang":
+        time.sleep(3600)
+    if scenario == "endless-checks":
+        while True:
+            subprocess.run(["lisp-check", "package.lisp"], stdin=subprocess.DEVNULL, capture_output=True)
+    if scenario == "budget":
+        budget_stop(turn)
+        return 1
+    if scenario == "never-done" or (scenario == "stop-early" and not resumed):
+        assistant_text("I stop here.")
+        result(turn)
+        return 0
+    if os.environ.get("FAKE_CLAUDE_TOOL_OUTPUT"):
+        tool_result(os.environ["FAKE_CLAUDE_TOOL_OUTPUT"])
+    solution = os.environ.get("FAKE_CLAUDE_SOLUTION")
+    if solution:
+        for source in sorted(Path(solution).iterdir()):
+            shutil.copy2(source, source.name)
+    check_files()
+    assistant_text("Done.")
+    result(turn)
+    return 0
+
+
+sys.exit(main(sys.argv[1:]))
