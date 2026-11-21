@@ -436,7 +436,7 @@ def other_backend_problem(records_dir, task, backend):
             "give each backend its own --records-dir")
 
 
-def save_records(record_dir, run_folder, work, grading, result):
+def save_records(record_dir, run_folder, work, grading, result, stderr_log):
     """Build the record in a hidden sibling folder, then rename it to RECORD_DIR, so a record is complete or absent.
 
     A leftover RECORD_DIR without result.json is renamed to <run>.incomplete-<UTC time> first.
@@ -444,7 +444,7 @@ def save_records(record_dir, run_folder, work, grading, result):
     record_dir.parent.mkdir(parents=True, exist_ok=True)
     partial = record_dir.parent / f".{record_dir.name}.partial-{os.getpid()}"
     partial.mkdir()
-    for name in ("transcript.jsonl", "opencode.stderr.log", "codex.stderr.log", "claude.stderr.log", "session.json"):
+    for name in ("transcript.jsonl", stderr_log, "session.json"):
         if (run_folder / name).exists():
             shutil.copy2(run_folder / name, partial / name)
     if round_log(run_folder).exists():
@@ -531,7 +531,7 @@ def main(argv):
         "session_id": sid,
         "run_folder": str(run_folder),
     }
-    save_records(record_dir, run_folder, work, grading, result)
+    save_records(record_dir, run_folder, work, grading, result, backend.stderr_log)
     print(f"{args.task} {args.setup} #{args.run_number}: "
           f"{'PASS' if result['passed'] else 'FAIL'}, "
           f"hidden tests {result['hidden_tests_passed']}/{result['hidden_tests_total']}, "
