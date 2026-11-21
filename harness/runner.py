@@ -14,6 +14,7 @@ from pathlib import Path
 
 from harness import claude, codex
 from harness.grade import DEFAULT_CHECK_TIMEOUT, all_files_ok, copy_model_files, grade, is_test_file
+from harness.lisp_check import docker_socket
 from harness.opencode import isolated_env, write_run_config
 from harness.preflight import DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL
 from harness.setups import SETUPS
@@ -262,7 +263,7 @@ class ClaudeBackend:
         rounds = round_log(run_folder).parent
         readable, unreadable = confinement(args, run_folder)
         settings = claude.run_settings(work, rounds, [*readable, rounds], unreadable, rules_files(work),
-                                       codex.docker_socket())
+                                       docker_socket())
         settings_file = claude.write_settings(run_folder / "claude" / "settings.json", settings)
         self.options = claude.base_options(self.model, self.effort, settings_file)
         self.budget = claude.DEFAULT_BUDGET_USD if args.max_budget_usd is None else args.max_budget_usd
