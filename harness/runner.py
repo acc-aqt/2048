@@ -191,8 +191,9 @@ class CodexBackend:
         pass
 
     def result_fields(self, transcript, exit_code):
+        usage, total_tokens = codex.usage(json_events(transcript))
         return {"backend": self.name, "model": self.model, "reasoning_effort": self.effort,
-                "codex_exit_code": exit_code, "usage": None, "total_tokens": None, "cost_usd": None}
+                "codex_exit_code": exit_code, "usage": usage, "total_tokens": total_tokens, "cost_usd": None}
 
 
 BACKENDS = {backend.name: backend for backend in (OpenCodeBackend, CodexBackend)}

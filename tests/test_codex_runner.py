@@ -248,6 +248,45 @@ class CodexRecordTest(CodexTestCase):
         self.assertIn("fake-codex: crashed", (record / "codex.stderr.log").read_text())
         self.assertEqual(self.result()["codex_exit_code"], 1)
 
+    def test_token_usage_is_summed_over_both_turns_and_cost_is_null(self):
+        self.env["FAKE_CODEX_SCENARIO"] = "stop-early"
+
+        self.run_codex()
+
+        result = self.result()
+        self.assertEqual(result["usage"], {"input_tokens": 4000, "cached_input_tokens": 1400,
+                                           "output_tokens": 700, "reasoning_output_tokens": 150})
+        self.assertEqual(result["total_tokens"], 4700)
+        self.assertIsNone(result["cost_usd"])
+
+    def test_one_turn_usage(self):
+        self.run_codex()
+
+        result = self.result()
+        self.assertEqual(result["usage"], {"input_tokens": 1000, "cached_input_tokens": 400,
+                                           "output_tokens": 200, "reasoning_output_tokens": 50})
+        self.assertEqual(result["total_tokens"], 1200)
+
+    def test_usage_is_null_when_codex_reports_none(self):
+        self.env["FAKE_CODEX_SCENARIO"] = "crash"
+
+        self.run_codex()
+
+        result = self.result()
+        self.assertIsNone(result["usage"])
+        self.assertIsNone(result["total_tokens"])
+        self.assertIsNone(result["cost_usd"])
+
+    def test_opencode_records_have_no_usage(self):
+        self.env["FAKE_OPENCODE_SOLUTION"] = str(WRONG)
+
+        self.run_task()
+
+        result = self.result()
+        self.assertEqual(result["backend"], "opencode")
+        self.assertIsNone(result["usage"])
+        self.assertIsNone(result["cost_usd"])
+
     def test_round_log_is_saved(self):
         self.run_codex()
 

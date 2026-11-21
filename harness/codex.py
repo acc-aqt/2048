@@ -68,6 +68,22 @@ def permission_options(round_log_dir):
             "-c", f"{profile}.network={toml_table(network)}"]
 
 
+def usage(events):
+    """(token totals summed over every `turn.completed` event, input plus output tokens), or (None, None).
+
+    Codex counts cached input inside input_tokens and reasoning inside output_tokens.
+    """
+    totals = {}
+    for event in events:
+        if event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
+            for key, value in event["usage"].items():
+                if isinstance(value, int):
+                    totals[key] = totals.get(key, 0) + value
+    if not totals:
+        return None, None
+    return totals, totals.get("input_tokens", 0) + totals.get("output_tokens", 0)
+
+
 def exec_options(model, effort, round_log_dir):
     """Options shared by `codex exec` and `codex exec resume`."""
     return [
