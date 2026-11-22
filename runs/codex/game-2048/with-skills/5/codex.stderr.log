@@ -1,0 +1,4 @@
+Reading additional input from stdin...
+2026-11-22T10:06:41.557536Z ERROR codex_core::tools::router: error=apply_patch verification failed: invalid patch: multiple operations target /private/tmp/2048-runs/game-2048/with-skills/5-codex-20261122T100410Z/work/game-2048.lisp
+2026-11-22T10:06:46.646182Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /private/tmp/2048-runs/game-2048/with-skills/5-codex-20261122T100410Z/work/game-2048.lisp:
+             (values (multiple-value-list

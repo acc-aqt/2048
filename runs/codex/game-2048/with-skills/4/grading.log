@@ -1,0 +1,48 @@
+$ lisp-check --test game-2048-tests.lisp
+OK
+
+$ lisp-check game-2048.lisp
+OK
+
+$ lisp-check package.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-move-tests.lisp
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (MOVED *MIXED* :RIGHT)
+  wanted: (((0 0 4 4) (0 0 2 8) (0 4 2 8) (0 8 2 8)) 20 T)
+     got: (((4 4 0 0) (8 2 0 0) (8 2 4 0) (8 2 8 0)) 20 T)
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (MOVED *MIXED* :DOWN)
+  wanted: (((0 0 0 0) (0 0 0 0) (4 4 2 8) (4 8 4 16)) 40 T)
+     got: (((0 0 0 0) (0 0 0 0) (4 4 2 16) (4 8 4 8)) 40 T)
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (MOVED '((2 2 2 0) (0 0 0 0) (0 0 0 0) (0 0 0 0)) :RIGHT)
+  wanted: (((0 0 2 4) (0 0 0 0) (0 0 0 0) (0 0 0 0)) 4 T)
+     got: (((4 2 0 0) (0 0 0 0) (0 0 0 0) (0 0 0 0)) 4 T)
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (MOVED *SINGLE* :RIGHT)
+  wanted: (((0 0 0 0) (0 0 0 2) (0 0 0 0) (0 0 0 0)) 0 T)
+     got: (((0 0 0 0) (2 0 0 0) (0 0 0 0) (0 0 0 0)) 0 T)
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (MOVED *BOTTOM-RIGHT* :RIGHT)
+  wanted: (((0 0 0 0) (0 0 0 0) (0 0 2 4) (0 0 4 2)) 0 NIL)
+     got: (((0 0 0 0) (0 0 0 0) (4 2 0 0) (2 4 0 0)) 0 T)
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (MOVED *BOTTOM-RIGHT* :DOWN)
+  wanted: (((0 0 0 0) (0 0 0 0) (0 0 2 4) (0 0 4 2)) 0 NIL)
+     got: (((0 0 0 0) (0 0 0 0) (0 0 4 2) (0 0 2 4)) 0 T)
+hidden-tests/hidden-move-tests.lisp:?: test: 6 of 21 assertions failed
+FAIL
+
+$ lisp-check --test hidden-tests/hidden-play-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-slide-row-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-spawn-tile-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-won-game-over-tests.lisp
+OK

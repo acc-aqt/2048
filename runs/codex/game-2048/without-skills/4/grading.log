@@ -1,0 +1,77 @@
+$ lisp-check --test game-2048-tests.lisp
+Begin slide-row-merges test
+**********************************
+End slide-row-merges test
+Errors detected in this test: 0 
+Successes this test: 6
+Begin move-directions-and-immutability test
+**********************************
+End move-directions-and-immutability test
+Errors detected in this test: 0 
+Successes this test: 4
+Begin spawn-win-and-game-over test
+**********************************
+End spawn-win-and-game-over test
+Errors detected in this test: 0 
+Successes this test: 3
+Begin play-uses-string-streams test
+**********************************
+End play-uses-string-streams test
+Errors detected in this test: 0 
+Successes this test: 1
+OK
+
+$ lisp-check game-2048.lisp
+OK
+
+$ lisp-check package.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-move-tests.lisp
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (MOVED *MIXED* :RIGHT)
+  wanted: (((0 0 4 4) (0 0 2 8) (0 4 2 8) (0 8 2 8)) 20 T)
+     got: (((0 0 4 4) (0 0 8 2) (0 8 2 4) (0 8 2 8)) 20 T)
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (MOVED *MIXED* :DOWN)
+  wanted: (((0 0 0 0) (0 0 0 0) (4 4 2 8) (4 8 4 16)) 40 T)
+     got: (((0 0 0 0) (0 0 0 0) (4 4 2 16) (4 8 4 8)) 40 T)
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (MOVED *BOTTOM-RIGHT* :RIGHT)
+  wanted: (((0 0 0 0) (0 0 0 0) (0 0 2 4) (0 0 4 2)) 0 NIL)
+     got: (((0 0 0 0) (0 0 0 0) (0 0 4 2) (0 0 2 4)) 0 T)
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (MOVED *BOTTOM-RIGHT* :DOWN)
+  wanted: (((0 0 0 0) (0 0 0 0) (0 0 2 4) (0 0 4 2)) 0 NIL)
+     got: (((0 0 0 0) (0 0 0 0) (0 0 4 2) (0 0 2 4)) 0 T)
+hidden-tests/hidden-move-tests.lisp:?: test: 4 of 21 assertions failed
+FAIL
+
+$ lisp-check --test hidden-tests/hidden-play-tests.lisp
+Condition type: #<STANDARD-CLASS TYPE-ERROR>
+Message: `NIL' is not of the expected type `REAL'
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (WRITES-OUTPUT-P (APPEND (LOOP REPEAT 100 APPEND
+                                            (LIST "w" "a" "s" "d"))
+                                      (LIST "q")))
+Reason: an error (of type `#<STANDARD-CLASS TYPE-ERROR>') was detected.
+hidden-tests/hidden-play-tests.lisp:?: test: 1 of 4 assertions failed
+FAIL
+
+$ lisp-check --test hidden-tests/hidden-slide-row-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-spawn-tile-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-won-game-over-tests.lisp
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (OVER *STUCK*)
+  wanted: T
+     got: NIL
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: (OVER *WITH-2048*)
+  wanted: T
+     got: NIL
+hidden-tests/hidden-won-game-over-tests.lisp:?: test: 2 of 11 assertions failed
+FAIL

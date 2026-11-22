@@ -1,0 +1,108 @@
+(in-package :game-2048)
+
+(defun slide-row (row)
+  (let* ((tiles (remove 0 row)) (result nil) (score 0))
+    (loop while tiles do
+      (let ((tile (pop tiles)))
+        (if (and tiles (= tile (first tiles)))
+            (let ((merged (* 2 tile)))
+              (pop tiles) (push merged result) (incf score merged))
+            (push tile result))))
+    (let ((merged-count (length result)))
+      (values (append (nreverse result)
+                      (make-list (- 4 merged-count) :initial-element 0))
+              score))))
+
+(defun copy-board (board)
+  (let ((copy (make-array '(4 4) :initial-element 0)))
+    (dotimes (row 4 copy)
+      (dotimes (column 4)
+        (setf (aref copy row column) (aref board row column))))))
+
+(defun move (board direction)
+  (unless (member direction '(:left :right :up :down))
+    (error "Unknown direction: ~S" direction))
+  (let ((result (make-array '(4 4) :initial-element 0)) (score 0))
+    (dotimes (line 4)
+      (let ((cells (loop for offset below 4 collect
+                     (case direction
+                       (:left (aref board line offset))
+                       (:right (aref board line (- 3 offset)))
+                       (:up (aref board offset line))
+                       (:down (aref board (- 3 offset) line))))))
+        (multiple-value-bind (slid line-score) (slide-row cells)
+          (incf score line-score)
+          (dotimes (offset 4)
+            (let ((value (nth offset slid)))
+              (case direction
+                (:left (setf (aref result line offset) value))
+                (:right (setf (aref result line (- 3 offset)) value))
+                (:up (setf (aref result offset line) value))
+                (:down (setf (aref result (- 3 offset) line) value))))))))
+    (values result score (not (equalp board result)))))
+
+(defun spawn-tile (board random-state)
+  (let ((empty (loop for row below 4 append
+                 (loop for column below 4
+                       when (zerop (aref board row column))
+                         collect (cons row column)))))
+    (when (null empty) (error "Cannot spawn a tile on a full board."))
+    (let* ((position (nth (random (length empty) random-state) empty))
+           (value (if (< (random 10 random-state) 9) 2 4))
+           (result (copy-board board)))
+      (setf (aref result (car position) (cdr position)) value)
+      result)))
+
+(defun won-p (board)
+  (loop for row below 4 thereis
+    (loop for column below 4 thereis (= (aref board row column) 2048))))
+
+(defun game-over-p (board)
+  (loop for direction in '(:left :right :up :down)
+        always (not (third (multiple-value-list (move board direction))))))
+
+(defun print-board (board score output)
+  (format output "Score: ~D~%" score)
+  (dotimes (row 4)
+    (dotimes (column 4)
+      (if (zerop (aref board row column))
+          (format output "~6A" ".")
+          (format output "~6D" (aref board row column))))
+    (terpri output))
+  (terpri output))
+
+(defun play (&key (input *standard-input*) (output *standard-output*)
+                  (random-state (make-random-state t)))
+  (let ((board (make-array '(4 4) :initial-element 0))
+        (score 0) (announced-win nil))
+    (setf board (spawn-tile board random-state)
+          board (spawn-tile board random-state))
+    (print-board board score output)
+    (loop
+      (when (game-over-p board)
+        (format output "Game over.~%")
+        (return))
+      (let ((line (read-line input nil nil)))
+        (when (null line) (return))
+        (let ((direction (and (= (length line) 1)
+                              (case (char-downcase (char line 0))
+                                (#\w :up) (#\a :left)
+                                (#\s :down) (#\d :right)))))
+          (cond
+            ((and (= (length line) 1) (char-equal (char line 0) #\q))
+             (return))
+            (direction
+             (multiple-value-bind (moved gained changed) (move board direction)
+               (when changed
+                 (setf board (spawn-tile moved random-state))
+                 (incf score gained)
+                 (when (and (not announced-win) (won-p board))
+                   (format output "You won!~%")
+                   (setf announced-win t))))
+             (print-board board score output)
+             (when (game-over-p board)
+               (format output "Game over.~%")
+               (return)))
+            (t
+             (format output "Invalid key.~%")
+             (print-board board score output))))))))

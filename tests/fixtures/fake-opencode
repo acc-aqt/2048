@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Stand-in for `opencode` in tests. Sends nothing to any model.
+
+`run`: appends what it saw to $FAKE_OPENCODE_RECORD, copies $FAKE_OPENCODE_SOLUTION
+into the current folder, runs lisp-check on each .lisp file and prints JSON events.
+FAKE_OPENCODE_SCENARIO changes that:
+  hang            hang forever
+  endless-checks  run `lisp-check package.lisp` forever
+  check-then-hang start `lisp-check package.lisp`, then hang forever
+  never-done      write nothing, check nothing, stop
+  stop-early      like never-done, but behave normally when continued with `-s`
+  no-asd-first    write every file but the .asd, check nothing, stop; behave normally when continued
+FAKE_OPENCODE_SPECIAL_FILES=1 also leaves a dangling symlink `dangling.lisp` and a FIFO `pipe`.
+`export ID`: prints a small session JSON.
+"""
+
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+SESSION_ID = "ses_fake0001"
+RECORDED_ENV = (
+    "OPENCODE_CONFIG", "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT", "XDG_CONFIG_HOME",
+    "LISP_CHECK_LOG", "LLM_MODEL", "PATH",
+)
+
+
+def stdin_is_devnull():
+    stdin, null = os.fstat(0), os.stat(os.devnull)
+    return stat.S_ISCHR(stdin.st_mode) and stdin.st_rdev == null.st_rdev
+
+
+def record():
+    path = os.environ.get("FAKE_OPENCODE_RECORD")
+    if not path:
+        return
+    cwd = Path.cwd()
+    files = sorted(
+        str(p.relative_to(cwd)) for p in cwd.rglob("*")
+        if p.relative_to(cwd).parts[0] != ".git"
+    )
+    seen = {
+        "argv": sys.argv[1:],
+        "cwd": str(cwd),
+        "files": files,
+        "has_git": (cwd / ".git").is_dir(),
+        "stdin_is_devnull": stdin_is_devnull(),
+        "env": {key: os.environ.get(key) for key in RECORDED_ENV},
+        "config": json.loads(Path(os.environ["OPENCODE_CONFIG"]).read_text()),
+    }
+    with open(path, "a") as f:
+        f.write(json.dumps(seen) + "\n")
+
+
+def emit(event_type, **data):
+    event = {"type": event_type, "timestamp": int(time.time() * 1000), "sessionID": SESSION_ID}
+    print(json.dumps({**event, **data}), flush=True)
+
+
+def run(args):
+    record()
+    scenario = os.environ.get("FAKE_OPENCODE_SCENARIO", "")
+    continued = "-s" in args
+    if scenario == "hang":
+        emit("step_start", part={"type": "step-start"})
+        time.sleep(3600)
+    if scenario == "check-then-hang":
+        subprocess.Popen(["lisp-check", "package.lisp"], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(3600)
+    if scenario == "endless-checks":
+        while True:
+            subprocess.run(["lisp-check", "package.lisp"], stdin=subprocess.DEVNULL, capture_output=True)
+    if scenario == "never-done" or (scenario == "stop-early" and not continued):
+        emit("text", part={"type": "text", "text": "I stop here."})
+        return 0
+    solution = os.environ.get("FAKE_OPENCODE_SOLUTION")
+    if solution and scenario == "no-asd-first" and not continued:
+        for source in sorted(Path(solution).glob("*.lisp")):
+            shutil.copy2(source, source.name)
+        emit("text", part={"type": "text", "text": "I stop here."})
+        return 0
+    if solution:
+        for source in sorted(Path(solution).iterdir()):
+            shutil.copy2(source, source.name)
+    if os.environ.get("FAKE_OPENCODE_SPECIAL_FILES") and not Path("pipe").exists():
+        os.symlink("no-such-target.lisp", "dangling.lisp")
+        os.mkfifo("pipe")
+    for path in sorted(Path.cwd().glob("*.lisp")):
+        args = ["lisp-check"] + (["--test"] if path.name.endswith("tests.lisp") else []) + [path.name]
+        result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        emit("tool_use", part={
+            "type": "tool", "tool": "bash",
+            "state": {"status": "completed", "input": {"command": " ".join(args)},
+                      "output": result.stdout},
+        })
+    emit("text", part={"type": "text", "text": "Done."})
+    return 0
+
+
+def export(session_id):
+    print(json.dumps({"info": {"id": session_id}, "messages": []}))
+    return 0
+
+
+def main(args):
+    if args[:1] == ["run"]:
+        return run(args)
+    if args[:1] == ["export"] and len(args) == 2:
+        return export(args[1])
+    if args == ["--version"]:
+        print("1.19.6")
+        return 0
+    print(f"fake-opencode: unsupported arguments {args}", file=sys.stderr)
+    return 2
+
+
+sys.exit(main(sys.argv[1:]))
