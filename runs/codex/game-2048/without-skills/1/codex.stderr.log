@@ -1,0 +1,4 @@
+Reading additional input from stdin...
+2026-11-22T09:34:49.814525Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /private/tmp/2048-runs/game-2048/without-skills/1-codex-20261122T093110Z/work/game-2048-tests.lisp:
+(defpackage :game-2048-tests
+  (:use :common-lisp))

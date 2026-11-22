@@ -1,0 +1,41 @@
+{
+  "task": "game-2048",
+  "setup": "without-skills",
+  "run_number": 5,
+  "counted": true,
+  "backend": "codex",
+  "model": "gpt-6-luna",
+  "reasoning_effort": "low",
+  "codex_exit_code": 0,
+  "usage": {
+    "input_tokens": 598260,
+    "cached_input_tokens": 577792,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 8574,
+    "reasoning_output_tokens": 0
+  },
+  "total_tokens": 606834,
+  "cost_usd": null,
+  "started_at": "2026-11-22T10:09:14+00:00",
+  "duration_seconds": 205.6,
+  "limits": {
+    "max_rounds": 40,
+    "timeout_seconds": 7200,
+    "check_timeout_seconds": 120
+  },
+  "limit_hit": null,
+  "continue_sent": false,
+  "check_fix_rounds": 18,
+  "hidden_tests_passed": 66,
+  "hidden_tests_total": 66,
+  "source_files": {
+    "game-2048-tests.lisp": "OK",
+    "game-2048.lisp": "OK",
+    "package.lisp": "OK"
+  },
+  "skipped_files": {},
+  "passed": true,
+  "suspected_leak": false,
+  "session_id": "01a202bb-3b68-7c93-a049-801b2c60578d",
+  "run_folder": "/private/tmp/2048-runs/game-2048/without-skills/5-codex-20261122T100914Z"
+}
