@@ -1,6 +1,10 @@
 # 2048
 
-Proof of concept: do the lisp-skills rules and `lisp-check` help a weak model write a working 2048 game in Common Lisp (Allegro CL)? See issue #1.
+Proof of concept: do the [lisp-skills](https://github.com/acc-aqt/lisp-skills) rules and `lisp-check` help a weak model write a working 2048 game in Common Lisp (Allegro CL)? See issue #1.
+
+**Result (2026-11-22, 5 counted runs per cell):** the rules clearly help Claude Code on `haiku`/low: 5/5 passed instead of 4/5, a median of 6 check-fix rounds instead of 10, and half the tokens, at about $0.02 per run. For Codex on `gpt-6-luna`/low they make little difference: 3/5 passed in both setups. **Read [FINDINGS.md](FINDINGS.md)** for the question, the setup, the results, what they show and how far to trust them. Reports: [RESULTS-overview.md](RESULTS-overview.md), [RESULTS-claude.md](RESULTS-claude.md), [RESULTS-codex.md](RESULTS-codex.md). Raw records: [runs/](runs/).
+
+The rest of this README is the manual for the harness.
 
 The default benchmark on the Mac runs hosted agents on their weakest models at low effort: Claude Code with `haiku` and Codex CLI with `gpt-6-luna`. Local Qwen3-8B was dropped as the Mac benchmark after it failed a simple Python smoke test; see [ADR 0001](docs/adr/0001-drop-qwen3-8b-use-weakest-hosted-models.md). The OpenCode backend stays as an alternate for the openSUSE/LiteLLM work setup.
 
@@ -8,11 +12,12 @@ The default benchmark on the Mac runs hosted agents on their weakest models at l
 
 | Piece | Version / location |
 |---|---|
-| Ollama | 0.40.16 (brew formula, `brew services start ollama`) |
-| Model | `qwen3-8b-32k`: `qwen3:8b` Q4_K_M with `PARAMETER num_ctx 32768` |
-| OpenCode | 1.19.6, npm `opencode-ai` (v1 config schema: `provider`, `permission`) |
+| Claude Code | 2.1.330, logged in with a subscription (`claude` on `PATH`); runs `haiku`/low |
+| Codex CLI | 0.164.0-alpha.11.1 (`codex` on `PATH`, or the one bundled in `/Applications/ChatGPT.app`); runs `gpt-6-luna`/low |
 | lisp-skills | submodule `vendor/lisp-skills`, pinned at `07effc058c7d0c89347318f000d16ad5f13612a6` |
-| Allegro CL | 11.0 Express in the Docker image `lisp-skills-allegro:latest` |
+| Allegro CL | 11.0 Express in the Docker image `lisp-skills-allegro:latest` (Docker via OrbStack on the Mac) |
+| OpenCode (alternate backend) | 1.19.6, npm `opencode-ai` (v1 config schema: `provider`, `permission`) |
+| Ollama + model (alternate, dropped on the Mac) | Ollama 0.40.16; `qwen3-8b-32k`: `qwen3:8b` Q4_K_M with `PARAMETER num_ctx 32768` |
 
 After cloning: `git submodule update --init`.
 
