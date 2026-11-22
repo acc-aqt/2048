@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -171,7 +172,8 @@ class ClaudeConfinementTest(ClaudeTestCase):
         (seen,) = self.seen()
         filesystem = seen["settings"]["sandbox"]["filesystem"]
         for path in (REPO / "tasks", REPO / "reference", REPO / "runs", REPO / ".git", REPO / "tests",
-                     self.records, self.run_root, Path.home()):
+                     self.records, self.run_root, Path.home(), Path("/tmp").resolve(),
+                     Path(tempfile.gettempdir()).resolve()):
             self.assertIn(str(path), filesystem["denyRead"])
         for path in (REPO / "bin", REPO / "harness"):
             self.assertNotIn(str(path), filesystem["denyRead"])
@@ -183,12 +185,24 @@ class ClaudeConfinementTest(ClaudeTestCase):
         filesystem = seen["settings"]["sandbox"]["filesystem"]
         run_folder = Path(seen["cwd"]).parent
         round_log_dir = Path(seen["env"]["LISP_CHECK_LOG"]).parent
+        tmp_dir = str(run_folder / "agent-tmp")
         self.assertEqual(set(filesystem["allowRead"]),
                          {seen["cwd"], str(run_folder / "bin"), str(round_log_dir), str(REPO),
-                          str(Path.home() / ".docker")})
-        self.assertEqual(filesystem["allowWrite"], [str(round_log_dir)])
+                          str(Path.home() / ".docker"), tmp_dir})
+        self.assertEqual(filesystem["allowWrite"], [str(round_log_dir), tmp_dir])
         socket = Path(self.tmp.name).resolve() / "docker.sock"
         self.assertEqual(seen["settings"]["sandbox"]["network"], {"allowUnixSockets": [str(socket)]})
+
+    def test_claude_code_gets_its_own_temp_folder_instead_of_the_one_every_claude_session_shares(self):
+        self.env["CLAUDE_CODE_TMPDIR"] = "/tmp"
+
+        self.run_claude()
+
+        (seen,) = self.seen()
+        tmp_dir = Path(seen["cwd"]).parent / "agent-tmp"
+        self.assertEqual(seen["env"]["CLAUDE_CODE_TMPDIR"], str(tmp_dir))
+        self.assertTrue(tmp_dir.is_dir())
+        self.assertFalse(tmp_dir.is_relative_to(seen["cwd"]))
 
 
 class ClaudeSetupTest(ClaudeTestCase):

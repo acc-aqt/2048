@@ -108,12 +108,16 @@ What the agent can reach:
 | | Claude | Codex | OpenCode |
 |---|---|---|---|
 | Enforced by | Claude Code's OS sandbox for `Bash` (required: the run fails if it's unavailable, no unsandboxed retry), permission rules for the file tools | a Codex permissions profile (`harness`) for every command | the config's `external_directory: deny`, for the file tools only; shell commands are not sandboxed |
-| Can't read | `$HOME`, the run root (other runs), the records directories, every repo entry but `bin/` and `harness/` (the `lisp-check` wrapper); the `Read` tool reads nothing outside `work/` | the same paths | outside `work/`, with the file tools |
+| Can't read | `$HOME`, the run root (other runs), the records directories, every repo entry but `bin/` and `harness/` (the `lisp-check` wrapper), `/tmp` and the user's temp folder (`$TMPDIR`); the `Read` tool reads nothing outside `work/` | the same paths | outside `work/`, with the file tools |
 | Can write | `work/` and the round log's folder | `work/` and the round log's folder | `work/`, with the file tools |
 | Rules files `work/CLAUDE.md`, `work/AGENTS.md` | readable, never writable | readable, never writable | n/a |
 | Network from shell commands | only the Docker socket | open while `lisp-check` uses Docker: the profile can only reach the Docker socket with network on; off in native mode | open |
 
 The repo folder itself, the run's `bin/` and `~/.docker` stay readable so `lisp-check` can run. `suspected_leak` in every record (see below) flags a run whose transcript suggests the confinement didn't hold.
+
+The temp folders are blocked because other sessions leave files there: every Claude Code session on the machine shares `/tmp/claude-<uid>`, and a practice run found and read a lisp-skills copy in an old session's scratchpad there. Claude runs set `CLAUDE_CODE_TMPDIR` to the run's own `agent-tmp/` (outside `work/`) for Claude Code's own temp files. The sandboxed shell's `TMPDIR` stays `/tmp/claude-<uid>`, so shell here-documents (`cat > f <<EOF`) fail in both Claude and Codex runs; the file tools still work.
+
+Codex's `--json` stream leaves out some commands the sandbox blocks (a refused write or here-document), so a Codex transcript isn't a complete list of attempts.
 
 ### Setups
 
@@ -170,7 +174,7 @@ None yet.
 
 ### What one call does
 
-1. Creates a fresh run folder `<run root>/<task>/<setup>/<run>-<UTC time>/` with `work/` (the model's folder: an empty `git init` repo), `bin/lisp-check`, the backend's state (`opencode/`, `codex-home/` or `claude/settings.json`) and the round log `rounds/lisp-check.log`, which stays outside `work/`. The run root (default `$RUN_ROOT` or `/tmp/2048-runs`) must be outside the repo and outside `$HOME`.
+1. Creates a fresh run folder `<run root>/<task>/<setup>/<run>-<backend>-<UTC time>/` with `work/` (the model's folder: an empty `git init` repo), `bin/lisp-check`, the backend's state (`opencode/`, `codex-home/` or `claude/settings.json`) and the round log `rounds/lisp-check.log`, which stays outside `work/`. The run root (default `$RUN_ROOT` or `/tmp/2048-runs`) must be outside the repo and outside `$HOME`.
 2. Runs the agent (`opencode run --format json --thinking`, `codex exec --json` or `claude -p --output-format stream-json`) in `work/` with the shared prompt, stdin closed and the isolated environment, enforcing the limits above, and sends the continue message if needed.
 3. OpenCode only: exports the session with `opencode export`. Then grades: every required and every present `.lisp` file in `work/` through `lisp-check` (`--test` for `*tests.lisp`) and the hidden tests with `lisp-check --test`, all in a copy of `work/`. These grading checks don't count as rounds.
 4. Writes `<records dir>/<task>/<setup>/<run>/` (records dir default `runs/`): `result.json`, `transcript.jsonl` (the agent's JSON event stream), `opencode.stderr.log`, `codex.stderr.log` or `claude.stderr.log`, `session.json` (the OpenCode export), `lisp-check.log` (one line per round), `grading.log` and `src/` (the model's final files: folders and regular files only; symlinks and special files such as FIFOs are skipped and listed in `skipped_files`). It builds the record in a hidden sibling folder and renames it into place at the end, so a record folder either has its `result.json` or doesn't exist. A record counts as existing only when it has `result.json`: run-task refuses to overwrite one, and renames a leftover folder without `result.json` to `<run>.incomplete-<UTC time>` before saving the new record. Grading copies `work/` the same way, so it sees the same files as `src/`.
@@ -185,7 +189,7 @@ None yet.
 - `cost_usd`: Claude only, as Claude Code reports it; `null` for Codex and OpenCode, never an estimate;
 - `hidden_tests_passed`/`hidden_tests_total`, per-file status in `source_files` (`OK`, `FAIL`, `TIMEOUT` for each `.lisp` file, `MISSING` for any absent required file, `.asd` included), `skipped_files` (`{path: "symlink" | "special file"}`);
 - `passed`: every file OK, every hidden assertion passed, no limit hit;
-- `suspected_leak`: `true` if the transcript names the repo path, `hidden-tests` or `reference/`. It doesn't fail the run; review the transcript.
+- `suspected_leak`: `true` if the transcript names the repo path, `hidden-tests`, `reference/` or `/tmp/claude-` (another Claude Code session's temp folder), or, in a `without-skills` run, `lisp-skills` (only the rules text and its copies name it). It doesn't fail the run; review the transcript.
 
 The tests drive `bin/run-task` with `tests/fixtures/fake-opencode`, `fake-codex` and `fake-claude` (set through `OPENCODE_BIN`, `CODEX_BIN` and `CLAUDE_BIN`), so they never contact a model.
 

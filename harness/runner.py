@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,7 +39,8 @@ Create these files directly in the current folder, not in a subfolder: {files}. 
 {spec}
 {note}
 """
-LEAK_MARKERS = (str(REPO), "hidden-tests", "reference/")
+LEAK_MARKERS = (str(REPO), "hidden-tests", "reference/", "/tmp/claude-")
+SKILLS_LEAK_MARKERS = ("lisp-skills",)
 CONTINUE_MESSAGE = "Continue until every file is created and every .lisp file prints OK in lisp-check."
 SPEC_FILE_ROW =re.compile(r"^\| `([\w.-]+\.(?:asd|lisp))` \|", re.MULTILINE)
 
@@ -149,13 +151,15 @@ def rules_files(work):
 def confinement(args, run_folder):
     """(readable, unreadable): paths for an agent's sandboxed shell.
 
-    Unreadable: $HOME, the run root (other runs), the records directories and every repo entry but
-    the lisp-check wrapper's bin/ and harness/. Readable, as narrower exceptions: the repo folder
-    itself (Python lists it to import harness), the run's bin/ and docker's client config.
+    Unreadable: $HOME, the run root (other runs), the records directories, every repo entry but
+    the lisp-check wrapper's bin/ and harness/, and the temp folders, where other sessions (Claude Code
+    scratchpads among them) may have left copies of the rules. Readable, as narrower exceptions: the repo
+    folder itself (Python lists it to import harness), the run's bin/ and docker's client config.
     """
     readable = [REPO, run_folder / "bin", Path.home() / ".docker"]
     unreadable = [*(path for path in sorted(REPO.iterdir()) if path.name not in LISP_CHECK_PARTS),
-                  DEFAULT_RECORDS, args.records_dir, args.run_root, Path.home()]
+                  DEFAULT_RECORDS, args.records_dir, args.run_root, Path.home(),
+                  Path("/tmp").resolve(), Path(tempfile.gettempdir()).resolve()]
     return readable, list(dict.fromkeys(unreadable))
 
 
@@ -259,11 +263,13 @@ class ClaudeBackend:
     def __init__(self, binary, args, run_folder, work, setup):
         self.binary = binary
         self.model, self.effort = claude.model_settings(args.model, args.reasoning_effort)
-        self.env = with_lisp_check(claude.isolated_env(os.environ, self.effort), run_folder)
+        tmp_dir = run_folder / "agent-tmp"
+        tmp_dir.mkdir()
+        self.env = with_lisp_check(claude.isolated_env(os.environ, self.effort, tmp_dir), run_folder)
         rounds = round_log(run_folder).parent
         readable, unreadable = confinement(args, run_folder)
-        settings = claude.run_settings(work, rounds, [*readable, rounds], unreadable, rules_files(work),
-                                       docker_socket())
+        settings = claude.run_settings(work, [rounds, tmp_dir], [*readable, rounds, tmp_dir], unreadable,
+                                       rules_files(work), docker_socket())
         settings_file = claude.write_settings(run_folder / "claude" / "settings.json", settings)
         self.options = claude.base_options(self.model, self.effort, settings_file)
         self.budget = claude.DEFAULT_BUDGET_USD if args.max_budget_usd is None else args.max_budget_usd
@@ -399,10 +405,12 @@ def export_session(opencode, sid, work, env, target):
             pass
 
 
-def suspected_leak(transcript):
-    """Whether TRANSCRIPT names the repo, the hidden tests or the reference solution; flagged for review, not failed."""
+def suspected_leak(transcript, setup):
+    """Whether TRANSCRIPT names the repo, the hidden tests, the reference solution or another Claude Code
+    session's temp folder, or, for a setup without rules, lisp-skills; flagged for review, not failed."""
     text = transcript.read_text(errors="replace") if transcript.exists() else ""
-    return any(marker in text for marker in LEAK_MARKERS)
+    markers = LEAK_MARKERS + (SKILLS_LEAK_MARKERS if setup.rules_file is None else ())
+    return any(marker in text for marker in markers)
 
 
 def count_rounds(log):
@@ -477,7 +485,7 @@ def main(argv):
         return 1
 
     started = utc_now()
-    run_folder = args.run_root / args.task / args.setup / f"{args.run_number}-{started:%Y%m%dT%H%M%SZ}"
+    run_folder = args.run_root / args.task / args.setup / f"{args.run_number}-{args.backend}-{started:%Y%m%dT%H%M%SZ}"
     work = prepare_run_folder(run_folder)
     backend = BACKENDS[args.backend](binary, args, run_folder, work, setup)
     transcript = transcript_path(run_folder)
@@ -527,7 +535,7 @@ def main(argv):
         "source_files": grading["source_files"],
         "skipped_files": grading["skipped_files"],
         "passed": grading["passed"] and not limit_hit,
-        "suspected_leak": suspected_leak(transcript),
+        "suspected_leak": suspected_leak(transcript, setup),
         "session_id": sid,
         "run_folder": str(run_folder),
     }

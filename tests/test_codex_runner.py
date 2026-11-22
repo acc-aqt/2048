@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -130,13 +131,14 @@ class CodexIsolationTest(CodexTestCase):
         self.assertFalse(round_log_dir.is_relative_to(seen["cwd"]))
         self.assertNotEqual(round_log_dir, Path(seen["cwd"]).parent)
 
-    def test_sandbox_hides_hidden_tests_reference_records_and_other_runs(self):
+    def test_sandbox_hides_hidden_tests_reference_records_other_runs_and_temp_folders(self):
         self.run_codex()
 
         (seen,) = self.seen()
         filesystem = sandbox_filesystem(seen["argv"])
         for path in (REPO / "tasks", REPO / "reference", REPO / "runs", REPO / ".git", REPO / "tests",
-                     self.records, self.run_root, Path.home()):
+                     self.records, self.run_root, Path.home(), Path("/tmp").resolve(),
+                     Path(tempfile.gettempdir()).resolve()):
             self.assertEqual(filesystem[str(path)], "none", path)
         run_folder = Path(seen["cwd"]).parent
         for path in (REPO, run_folder / "bin", Path.home() / ".docker"):

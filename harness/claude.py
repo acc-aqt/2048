@@ -37,7 +37,7 @@ def model_settings(model=None, effort=None):
             effort or os.environ.get("CLAUDE_REASONING_EFFORT") or DEFAULT_EFFORT)
 
 
-def isolated_env(base_env, effort):
+def isolated_env(base_env, effort, tmp_dir):
     """BASE_ENV without the variables a parent Claude Code session exports and without any ANTHROPIC_*
     variable, with the effort pinned and auto-memory off.
 
@@ -45,18 +45,22 @@ def isolated_env(base_env, effort):
     which provider answers or which model runs, so every run uses the subscription login instead.
     CLAUDE_CODE_EFFORT_LEVEL beats --effort and every settings file. CLAUDE_CONFIG_DIR is kept: it says where
     the user's login lives.
+    CLAUDE_CODE_TMPDIR=TMP_DIR keeps Claude Code's own temp files out of the /tmp/claude-<uid> that every
+    Claude Code session on the machine shares. The sandboxed shell's TMPDIR stays /tmp/claude-<uid>, which
+    the sandbox can't read, so shell here-documents fail, as they do in Codex runs.
     """
     env = {key: value for key, value in base_env.items()
            if not key.startswith(("CLAUDE", "ANTHROPIC_")) or key == "CLAUDE_CONFIG_DIR"}
-    return {**env, "CLAUDE_CODE_EFFORT_LEVEL": effort, "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
+    return {**env, "CLAUDE_CODE_EFFORT_LEVEL": effort, "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CODE_TMPDIR": str(tmp_dir)}
 
 
-def run_settings(work, round_log_dir, readable, unreadable, read_only, docker_socket):
+def run_settings(work, writable, readable, unreadable, read_only, docker_socket):
     """The per-run settings: no memory, hooks or user instructions; file tools and shell confined to WORK.
 
     Shell commands run in Claude Code's OS sandbox: they can't read UNREADABLE (except the narrower
-    READABLE paths lisp-check needs), write only WORK (but not the READ_ONLY files in it) and
-    ROUND_LOG_DIR, and may reach DOCKER_SOCKET. The file tools can't edit READ_ONLY either.
+    READABLE paths lisp-check needs), write only WORK (but not the READ_ONLY files in it) and the
+    WRITABLE folders, and may reach DOCKER_SOCKET. The file tools can't edit READ_ONLY either.
     """
     home = Path.home()
     sandbox_network = {"allowUnixSockets": [docker_socket]} if docker_socket else {}
@@ -80,7 +84,7 @@ def run_settings(work, round_log_dir, readable, unreadable, read_only, docker_so
             "filesystem": {
                 "denyRead": [str(path) for path in unreadable],
                 "allowRead": [str(work), *(str(path) for path in readable)],
-                "allowWrite": [str(round_log_dir)],
+                "allowWrite": [str(path) for path in writable],
                 "denyWrite": [str(path) for path in read_only],
             },
             "network": sandbox_network,

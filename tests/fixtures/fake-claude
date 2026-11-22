@@ -43,7 +43,7 @@ RESUMED_TURN = {"usage": {"input_tokens": 50, "cache_creation_input_tokens": 100
                                                    "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
                                                    "webSearchRequests": 0, "costUSD": 0.05, "contextWindow": 1000000}},
                 "total_cost_usd": 0.75}
-RECORDED_ENV = ("CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CONFIG_DIR",
+RECORDED_ENV = ("CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_TMPDIR", "CLAUDE_CONFIG_DIR",
                 "LISP_CHECK_LOG", "PATH")
 
 

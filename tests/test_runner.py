@@ -76,6 +76,12 @@ class RunFolderTest(RunnerTestCase):
         self.assertTrue(Path(seen["cwd"]).is_relative_to(self.run_root))
         self.assertNotIn(HIDDEN_TEST.read_text(), json.dumps(seen))
 
+    def test_run_folder_name_has_the_backend_so_backends_started_together_do_not_collide(self):
+        self.run_task()
+
+        (seen,) = self.seen()
+        self.assertRegex(Path(seen["cwd"]).parent.name, r"^1-opencode-\d{8}T\d{6}Z$")
+
     def test_opencode_runs_hands_off_and_isolated(self):
         self.run_task()
 
@@ -484,6 +490,23 @@ class LeakFlagTest(RunnerTestCase):
                 result = self.result(run_number=str(number))
                 self.assertIs(result["suspected_leak"], True)
                 self.assertEqual(result["limit_hit"], None)
+
+    def test_transcript_naming_another_claude_code_temp_folder_is_flagged_in_every_setup(self):
+        output = "/private/tmp/claude-501/-Users-x-proj/123/scratchpad/notes/rules.md"
+        self.env["FAKE_CLAUDE_TOOL_OUTPUT"] = output
+        for number, setup in enumerate(("with-skills", "without-skills"), start=1):
+            with self.subTest(setup=setup):
+                self.run_task("--backend", "claude", setup=setup, run_number=str(number))
+
+                self.assertIs(self.result(setup=setup, run_number=str(number))["suspected_leak"], True)
+
+    def test_lisp_skills_in_the_transcript_is_flagged_only_without_skills(self):
+        self.env["FAKE_CLAUDE_TOOL_OUTPUT"] = "<!-- GENERATED from the skills in plugins/lisp-skills -->"
+        for number, (setup, flagged) in enumerate((("with-skills", False), ("without-skills", True)), start=1):
+            with self.subTest(setup=setup):
+                self.run_task("--backend", "claude", setup=setup, run_number=str(number))
+
+                self.assertIs(self.result(setup=setup, run_number=str(number))["suspected_leak"], flagged)
 
     def test_clean_runs_of_every_backend_are_not_flagged(self):
         for number, backend in enumerate(("claude", "codex", "opencode"), start=1):
