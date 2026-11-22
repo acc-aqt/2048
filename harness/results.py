@@ -235,7 +235,7 @@ def leaks_section(flagged):
         return "No run is flagged: no transcript names the repo, `hidden-tests` or `reference/`.\n"
     items = "\n".join(f"- {label}`{path}`" for label, path in flagged)
     return f"""\
-These runs' transcripts name the repo, `hidden-tests` or `reference/`, so the model may have looked for the hidden tests or the reference solution. Their results stand as recorded; review each transcript before trusting it:
+These runs' transcripts name the repo, `hidden-tests`, `reference/` or another Claude Code session's temp folder (`/tmp/claude-`), or, without skills, `lisp-skills`, so the model may have looked for the hidden tests, the reference solution or the rules. Their results stand as recorded; review each transcript before trusting it:
 
 {items}
 """
