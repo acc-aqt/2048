@@ -1,0 +1,41 @@
+{
+  "task": "game-2048",
+  "setup": "without-skills",
+  "run_number": 0,
+  "counted": false,
+  "backend": "claude",
+  "model": "haiku",
+  "reasoning_effort": "low",
+  "budget_usd": 5.0,
+  "claude_exit_code": 0,
+  "usage": {
+    "input_tokens": 50,
+    "output_tokens": 30252,
+    "cache_read_input_tokens": 826410,
+    "cache_creation_input_tokens": 48887
+  },
+  "total_tokens": 905599,
+  "cost_usd": 0.0331725,
+  "started_at": "2026-11-22T06:41:21+00:00",
+  "duration_seconds": 269.4,
+  "limits": {
+    "max_rounds": 40,
+    "timeout_seconds": 7200,
+    "check_timeout_seconds": 120
+  },
+  "limit_hit": null,
+  "continue_sent": true,
+  "check_fix_rounds": 17,
+  "hidden_tests_passed": 66,
+  "hidden_tests_total": 66,
+  "source_files": {
+    "game-2048-tests.lisp": "OK",
+    "game-2048.lisp": "OK",
+    "package.lisp": "OK"
+  },
+  "skipped_files": {},
+  "passed": true,
+  "suspected_leak": false,
+  "session_id": "bfbc75fc-eeeb-4636-8f1f-36804ef6adc1",
+  "run_folder": "/private/tmp/2048-runs/game-2048/without-skills/0-20261122T064121Z"
+}
