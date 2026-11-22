@@ -1,0 +1,93 @@
+$ lisp-check --test game-2048-tests.lisp
+Begin unnamed test
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "row result"
+  wanted: T
+     got: "row result"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "score"
+  wanted: T
+     got: "score"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "three tiles"
+  wanted: T
+     got: "three tiles"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "three tile score"
+  wanted: T
+     got: "three tile score"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "skip zeros"
+  wanted: T
+     got: "skip zeros"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "zero row score"
+  wanted: T
+     got: "zero row score"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "move changed"
+  wanted: T
+     got: "move changed"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "move score"
+  wanted: T
+     got: "move score"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "move placement"
+  wanted: T
+     got: "move placement"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "input kept"
+  wanted: T
+     got: "input kept"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "repeatable spawn"
+  wanted: T
+     got: "repeatable spawn"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "spawn count"
+  wanted: T
+     got: "spawn count"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "not won"
+  wanted: T
+     got: "not won"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "not over"
+  wanted: NIL
+     got: "not over"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "won"
+  wanted: T
+     got: "won"
+ * * * UNEXPECTED TEST FAILURE * * *
+Test failed: "invalid key output"
+  wanted: 129
+     got: "invalid key output"
+**********************************
+End unnamed test
+Errors detected in this test: 16 UNEXPECTED: 16
+Successes this test: 0
+game-2048-tests.lisp:?: test: no tester assertions ran (write them as top-level (test ...) forms, not inside with-tests)
+FAIL
+
+$ lisp-check game-2048.lisp
+OK
+
+$ lisp-check package.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-move-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-play-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-slide-row-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-spawn-tile-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-won-game-over-tests.lisp
+OK

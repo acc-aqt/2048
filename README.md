@@ -1,6 +1,10 @@
 # 2048
 
-Proof of concept: do the lisp-skills rules and `lisp-check` help a weak model write a working 2048 game in Common Lisp (Allegro CL)? See issue #1.
+Proof of concept: do the [lisp-skills](https://github.com/acc-aqt/lisp-skills) rules and `lisp-check` help a weak model write a working 2048 game in Common Lisp (Allegro CL)? See issue #1.
+
+**Result (2026-11-22, 5 counted runs per cell):** the rules clearly help Claude Code on `haiku`/low: 5/5 passed instead of 4/5, a median of 6 check-fix rounds instead of 10, and half the tokens, at about $0.02 per run. For Codex on `gpt-6-luna`/low they make little difference: 3/5 passed in both setups. **Read [FINDINGS.md](FINDINGS.md)** for the question, the setup, the results, what they show and how far to trust them. Reports: [RESULTS-overview.md](RESULTS-overview.md), [RESULTS-claude.md](RESULTS-claude.md), [RESULTS-codex.md](RESULTS-codex.md). Raw records: [runs/](runs/).
+
+The rest of this README is the manual for the harness.
 
 The default benchmark on the Mac runs hosted agents on their weakest models at low effort: Claude Code with `haiku` and Codex CLI with `gpt-6-luna`. Local Qwen3-8B was dropped as the Mac benchmark after it failed a simple Python smoke test; see [ADR 0001](docs/adr/0001-drop-qwen3-8b-use-weakest-hosted-models.md). The OpenCode backend stays as an alternate for the openSUSE/LiteLLM work setup.
 
@@ -8,11 +12,12 @@ The default benchmark on the Mac runs hosted agents on their weakest models at l
 
 | Piece | Version / location |
 |---|---|
-| Ollama | 0.40.16 (brew formula, `brew services start ollama`) |
-| Model | `qwen3-8b-32k`: `qwen3:8b` Q4_K_M with `PARAMETER num_ctx 32768` |
-| OpenCode | 1.19.6, npm `opencode-ai` (v1 config schema: `provider`, `permission`) |
+| Claude Code | 2.1.330, logged in with a subscription (`claude` on `PATH`); runs `haiku`/low |
+| Codex CLI | 0.164.0-alpha.11.1 (`codex` on `PATH`, or the one bundled in `/Applications/ChatGPT.app`); runs `gpt-6-luna`/low |
 | lisp-skills | submodule `vendor/lisp-skills`, pinned at `07effc058c7d0c89347318f000d16ad5f13612a6` |
-| Allegro CL | 11.0 Express in the Docker image `lisp-skills-allegro:latest` |
+| Allegro CL | 11.0 Express in the Docker image `lisp-skills-allegro:latest` (Docker via OrbStack on the Mac) |
+| OpenCode (alternate backend) | 1.19.6, npm `opencode-ai` (v1 config schema: `provider`, `permission`) |
+| Ollama + model (alternate, dropped on the Mac) | Ollama 0.40.16; `qwen3-8b-32k`: `qwen3:8b` Q4_K_M with `PARAMETER num_ctx 32768` |
 
 After cloning: `git submodule update --init`.
 
@@ -72,40 +77,100 @@ A private reference solution lives in `reference/<task-name>/`. It only validate
 ### `bin/run-task`
 
 ```sh
-bin/run-task TASK SETUP RUN_NUMBER [--run-root DIR] [--records-dir DIR]
+bin/run-task TASK SETUP RUN_NUMBER [--backend claude|codex|opencode]
+             [--model MODEL] [--reasoning-effort EFFORT] [--max-budget-usd USD]
+             [--run-root DIR] [--records-dir DIR]
              [--timeout SECONDS] [--max-rounds N] [--check-timeout SECONDS]
-bin/run-task dummy-slide-row without-skills 0
+bin/run-task dummy-slide-row without-skills 0 --backend codex --records-dir runs/codex
 ```
+
+### Backends
+
+`--backend` picks the agent. The default is `opencode`, so on the Mac always pass `--backend claude` or `--backend codex`.
+
+| Backend | CLI | Model: flag, env var, default | Effort: flag, env var, default | Budget |
+|---|---|---|---|---|
+| `claude` | `$CLAUDE_BIN`, else `claude` on `PATH` | `--model`, `CLAUDE_MODEL`, `haiku` | `--reasoning-effort`, `CLAUDE_REASONING_EFFORT`, `low` | `--max-budget-usd`, default 5 USD |
+| `codex` | `$CODEX_BIN`, else `codex` on `PATH`, else the CLI bundled in `/Applications/ChatGPT.app` | `--model`, `CODEX_MODEL`, `gpt-6-luna` | `--reasoning-effort`, `CODEX_REASONING_EFFORT`, `low` | none |
+| `opencode` | `$OPENCODE_BIN`, else `opencode` | `LLM_MODEL` (see "OpenCode") | none | none |
+
+A flag beats the env var, which beats the default. `--model` and `--reasoning-effort` are refused with `--backend opencode`, and `--max-budget-usd` with anything but `claude`. If the CLI isn't found, run-task stops before it creates a run folder.
+
+The Claude effort variable is `CLAUDE_REASONING_EFFORT`, not `CLAUDE_EFFORT`. A parent Claude Code session exports its own variables (`CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_EFFORT` with its own effort), so the runner drops every `CLAUDE*` variable except `CLAUDE_CONFIG_DIR` (where the login lives) from the run's environment. It then pins the effort with `--effort` and `CLAUDE_CODE_EFFORT_LEVEL`, which beats `--effort` and every settings file.
+
+The runner also drops every `ANTHROPIC_*` variable (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` and the like) from the run's environment, so a Claude run always uses the subscription login, never an API key, another provider or another model. Claude runs also write their session files under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`), like any Claude Code session.
+
+#### Isolation and confinement
+
+No run loads agent skills, plugins, MCP servers, subagents or web tools, and none reads the user's own instructions, config or memory:
+
+- **Claude:** `claude -p --output-format stream-json --verbose`, `--setting-sources project` with a per-run `<run folder>/claude/settings.json`, `--strict-mcp-config`, `--disable-slash-commands`, only the tools `Bash`, `Edit`, `Read` and `Write` (`Agent`, `WebFetch` and `WebSearch` disallowed), `--permission-mode dontAsk`. The settings turn off auto-memory, hooks and the built-in plugins and exclude `~/.claude/CLAUDE.md` and `~/.claude/rules/`.
+- **Codex:** `codex exec --json --ignore-user-config --ignore-rules --disable multi_agent`, with plugins, bundled skill instructions and web search off and `approval_policy="never"`. `CODEX_HOME` is a fresh `<run folder>/codex-home/` that only links the user's `auth.json`.
+- **OpenCode:** the isolated environment and config described under "OpenCode".
+
+What the agent can reach:
+
+| | Claude | Codex | OpenCode |
+|---|---|---|---|
+| Enforced by | Claude Code's OS sandbox for `Bash` (required: the run fails if it's unavailable, no unsandboxed retry), permission rules for the file tools | a Codex permissions profile (`harness`) for every command | the config's `external_directory: deny`, for the file tools only; shell commands are not sandboxed |
+| Can't read | `$HOME`, the run root (other runs), the records directories, every repo entry but `bin/` and `harness/` (the `lisp-check` wrapper), `/tmp` and the user's temp folder (`$TMPDIR`); the `Read` tool reads nothing outside `work/` | the same paths | outside `work/`, with the file tools |
+| Can write | `work/` and the round log's folder | `work/` and the round log's folder | `work/`, with the file tools |
+| Rules files `work/CLAUDE.md`, `work/AGENTS.md` | readable, never writable | readable, never writable | n/a |
+| Network from shell commands | only the Docker socket | open while `lisp-check` uses Docker: the profile can only reach the Docker socket with network on; off in native mode | open |
+
+The repo folder itself, the run's `bin/` and `~/.docker` stay readable so `lisp-check` can run. `suspected_leak` in every record (see below) flags a run whose transcript suggests the confinement didn't hold.
+
+The temp folders are blocked because other sessions leave files there: every Claude Code session on the machine shares `/tmp/claude-<uid>`, and a practice run found and read a lisp-skills copy in an old session's scratchpad there. Claude runs set `CLAUDE_CODE_TMPDIR` to the run's own `agent-tmp/` (outside `work/`) for Claude Code's own temp files. The sandboxed shell's `TMPDIR` stays `/tmp/claude-<uid>`, so shell here-documents (`cat > f <<EOF`) fail in both Claude and Codex runs; the file tools still work.
+
+Codex's `--json` stream leaves out some commands the sandbox blocks (a refused write or here-document), so a Codex transcript isn't a complete list of attempts.
 
 ### Setups
 
 | Setup | Gets besides the shared prompt |
 |---|---|
-| `with-skills` | the pinned `vendor/lisp-skills/dist/lisp-rules.md` as always-loaded OpenCode `instructions` |
+| `with-skills` | the pinned `vendor/lisp-skills/dist/lisp-rules.md` as the agent's always-loaded instructions |
 | `without-skills` | the sentence "Run lisp-check FILE until it prints OK." after the spec |
 
-Nothing else differs. The shared prompt is identical for both: work alone, create the files from the spec's file table directly in the current folder, and check every `.lisp` file with the listed `lisp-check` commands (`--test` for `*tests.lisp`), then the spec. Each run writes its own OpenCode config to `<run folder>/opencode/opencode.json`: a copy of `harness/opencode.json`, plus, for `with-skills` only, `instructions` pointing at a copy of the rules in `<run folder>/opencode/instructions/`. The without-skills run folder never contains the rules.
+Nothing else differs. The shared prompt is identical for both: work alone, create the files from the spec's file table directly in the current folder, and check every `.lisp` file with the listed `lisp-check` commands (`--test` for `*tests.lisp`), then the spec.
+
+How `with-skills` gets the rules:
+
+- **Claude:** a copy at `work/CLAUDE.md`.
+- **Codex:** a copy at `work/AGENTS.md`.
+- **OpenCode:** each run writes its own config to `<run folder>/opencode/opencode.json`, a copy of `harness/opencode.json` plus `instructions` pointing at a copy of the rules in `<run folder>/opencode/instructions/`.
+
+That rules text is the only skills difference; no run loads agent skills. The without-skills run folder never contains the rules. For Claude and Codex the rules file sits in `work/`, so it is also in the with-skills record's `src/`.
 
 ### Limits and the continue message
 
 | Limit | Default | Flag | On hit |
 |---|---|---|---|
 | check-fix rounds (lines in the round log) | 40 | `--max-rounds` | process group killed, run failed, `limit_hit: "rounds"` |
-| wall clock, both OpenCode turns together (the status check between them is not counted) | 7200 s | `--timeout` | process group killed, run failed, `limit_hit: "wall_clock"` |
+| wall clock, both agent turns together (the status check between them is not counted) | 7200 s | `--timeout` | process group killed, run failed, `limit_hit: "wall_clock"` |
+| Claude cost, both turns together | 5 USD | `--max-budget-usd` | Claude Code stops itself, run failed, `limit_hit: "budget"` |
 | one grading `lisp-check` | 120 s | `--check-timeout` | that file `TIMEOUT` (a hidden test file counts 0 passed), run failed |
 
-"Process group killed" means SIGTERM to OpenCode's process group, up to 10 s for every process in it to exit (a running `lisp-check` uses it to kill its check and container), then SIGKILL. Reaching the round limit fails the run even if the model stopped on its own at that round. The runner polls the round log every 0.2 s, so `check_fix_rounds` can end slightly above the limit.
+"Process group killed" means SIGTERM to the agent's process group, up to 10 s for every process in it to exit (a running `lisp-check` uses it to kill its check and container), then SIGKILL. Reaching the round limit fails the run even if the model stopped on its own at that round. The runner polls the round log every 0.2 s, so `check_fix_rounds` can end slightly above the limit. Claude Code's `--max-budget-usd` caps one process, so the resumed turn gets the budget minus what the session has cost so far.
 
-If the first turn ends without hitting a limit, the runner checks that every required file (`.asd` included) exists and every present `.lisp` file prints OK, in a copy of `work/` (own log, not counted as rounds). If any is missing or not OK, it sends the one fixed message "Continue until every file is created and every .lisp file prints OK in lisp-check." with `opencode run -s <session>`. It never sends a second one.
+If the first turn ends without hitting a limit, the runner checks that every required file (`.asd` included) exists and every present `.lisp` file prints OK, in a copy of `work/` (own log, not counted as rounds). If any is missing or not OK, it sends the one fixed message "Continue until every file is created and every .lisp file prints OK in lisp-check." to the same session (`opencode run -s`, `codex exec resume`, `claude --resume`). It never sends a second one.
 
 ### Practice run
 
-Run number 0 is the uncounted practice run (`"counted": false`); counted runs are 1 to 5. The limits may change once, after the practice run only; write the change and its reason under "Limit changes" below.
+Run number 0 is the uncounted practice run (`"counted": false`); counted runs are 1 to 5. The limits may change once, after the practice runs only; write the change and its reason under "Limit changes" below.
+
+Give each backend its own records directory (`runs/claude`, `runs/codex`). A record is keyed by task, setup and run number only, so run-task (and run-batch, before its first run) refuses with exit 1 when the records directory already holds records for the task from another backend; a record without a `backend` field counts as OpenCode's.
+
+`bin/preflight --backend B` (repeatable) checks `lisp-check`, then only the named backends: Claude with `claude auth status --json` and Codex with `codex login status`, neither sending a prompt, OpenCode with the model tool call described under "`bin/preflight`". Without `--backend` it checks every backend whose CLI is installed, so on a Mac with OpenCode installed a bare `bin/preflight` also runs the Ollama check. On the Mac pass `--backend claude --backend codex`.
+
+On the Mac, one practice run per backend and setup:
 
 ```sh
 export PATH="$PWD/bin:$PATH"
-bin/preflight
-bin/run-task game-2048 with-skills 0
+bin/preflight --backend claude --backend codex
+bin/run-task game-2048 with-skills 0    --backend claude --records-dir runs/claude
+bin/run-task game-2048 without-skills 0 --backend claude --records-dir runs/claude
+bin/run-task game-2048 with-skills 0    --backend codex  --records-dir runs/codex
+bin/run-task game-2048 without-skills 0 --backend codex  --records-dir runs/codex
 ```
 
 #### Limit changes
@@ -114,34 +179,59 @@ None yet.
 
 ### What one call does
 
-1. Creates a fresh run folder `<run root>/<task>/<setup>/<run>-<UTC time>/` with `work/` (the model's folder: an empty `git init` repo), `bin/lisp-check`, the OpenCode state directory and the round log, which stays outside `work/`. The run root (default `$RUN_ROOT` or `/tmp/2048-runs`) must be outside the repo and outside `$HOME`.
-2. Runs `opencode run --format json --thinking` in `work/` with the shared prompt, stdin closed and the isolated environment, enforcing the limits above, and sends the continue message if needed.
-3. Exports the session with `opencode export`, then grades: every required and every present `.lisp` file in `work/` through `lisp-check` (`--test` for `*tests.lisp`) and the hidden tests with `lisp-check --test`, all in a copy of `work/`. These grading checks don't count as rounds.
-4. Writes `runs/<task>/<setup>/<run>/`: `result.json`, `transcript.jsonl` (the JSON event stream), `session.json` (the export), `opencode.stderr.log`, `lisp-check.log` (one line per round), `grading.log` and `src/` (the model's final files: folders and regular files only; symlinks and special files such as FIFOs are skipped and listed in `skipped_files`). It builds the record in a hidden sibling folder and renames it into place at the end, so a record folder either has its `result.json` or doesn't exist. A record counts as existing only when it has `result.json`: run-task refuses to overwrite one, and renames a leftover folder without `result.json` to `<run>.incomplete-<UTC time>` before saving the new record. Grading copies `work/` the same way, so it sees the same files as `src/`.
+1. Creates a fresh run folder `<run root>/<task>/<setup>/<run>-<backend>-<UTC time>/` with `work/` (the model's folder: an empty `git init` repo), `bin/lisp-check`, the backend's state (`opencode/`, `codex-home/` or `claude/settings.json`) and the round log `rounds/lisp-check.log`, which stays outside `work/`. The run root (default `$RUN_ROOT` or `/tmp/2048-runs`) must be outside the repo and outside `$HOME`.
+2. Runs the agent (`opencode run --format json --thinking`, `codex exec --json` or `claude -p --output-format stream-json`) in `work/` with the shared prompt, stdin closed and the isolated environment, enforcing the limits above, and sends the continue message if needed.
+3. OpenCode only: exports the session with `opencode export`. Then grades: every required and every present `.lisp` file in `work/` through `lisp-check` (`--test` for `*tests.lisp`) and the hidden tests with `lisp-check --test`, all in a copy of `work/`. These grading checks don't count as rounds.
+4. Writes `<records dir>/<task>/<setup>/<run>/` (records dir default `runs/`): `result.json`, `transcript.jsonl` (the agent's JSON event stream), `opencode.stderr.log`, `codex.stderr.log` or `claude.stderr.log`, `session.json` (the OpenCode export), `lisp-check.log` (one line per round), `grading.log` and `src/` (the model's final files: folders and regular files only; symlinks and special files such as FIFOs are skipped and listed in `skipped_files`). It builds the record in a hidden sibling folder and renames it into place at the end, so a record folder either has its `result.json` or doesn't exist. A record counts as existing only when it has `result.json`: run-task refuses to overwrite one, and renames a leftover folder without `result.json` to `<run>.incomplete-<UTC time>` before saving the new record. Grading copies `work/` the same way, so it sees the same files as `src/`.
 
-`result.json` holds task, setup, run number, `counted`, model, start time, `duration_seconds` (time spent in OpenCode turns, both together: the same time the wall-clock limit counts, so without the status check between turns, the export and grading), `limits`, `limit_hit` (`null`, `"rounds"` or `"wall_clock"`), the last turn's OpenCode exit code, `continue_sent`, `check_fix_rounds`, `hidden_tests_passed`/`hidden_tests_total`, per-file status in `source_files` (`OK`, `FAIL`, `TIMEOUT` for each `.lisp` file, `MISSING` for any absent required file, `.asd` included), `skipped_files` (`{path: "symlink" | "special file"}`) and `passed` (every file OK, every hidden assertion passed, no limit hit).
+`result.json` holds:
 
-The tests drive `bin/run-task` with `tests/fixtures/fake-opencode` (set through `OPENCODE_BIN`), so they never contact a model.
+- task, setup, run number, `counted`, `backend`, `model`, `reasoning_effort` (Claude and Codex), `budget_usd` (Claude), `started_at`, `session_id`, `run_folder`;
+- `duration_seconds`: time spent in agent turns, both together: the same time the wall-clock limit counts, so without the status check between turns, the export and grading;
+- `limits`, `limit_hit` (`null`, `"rounds"`, `"wall_clock"` or `"budget"`), the last turn's exit code as `opencode_exit_code`, `codex_exit_code` or `claude_exit_code`, `continue_sent`, `check_fix_rounds`;
+- `usage`: token counts. Claude: `input_tokens`, `output_tokens`, `cache_read_input_tokens` and `cache_creation_input_tokens` for the whole session. Codex: its own names, summed over turns (cached input counted inside `input_tokens`, reasoning inside `output_tokens`). OpenCode: `null`;
+- `total_tokens`: one comparable number. Claude: all four counts added; Codex: input plus output; OpenCode: `null`;
+- `cost_usd`: Claude only, as Claude Code reports it; `null` for Codex and OpenCode, never an estimate;
+- `hidden_tests_passed`/`hidden_tests_total`, per-file status in `source_files` (`OK`, `FAIL`, `TIMEOUT` for each `.lisp` file, `MISSING` for any absent required file, `.asd` included), `skipped_files` (`{path: "symlink" | "special file"}`);
+- `passed`: every file OK, every hidden assertion passed, no limit hit;
+- `suspected_leak`: `true` if the transcript names the repo path, `hidden-tests`, `reference/` or `/tmp/claude-` (another Claude Code session's temp folder), or, in a `without-skills` run, `lisp-skills` (only the rules text and its copies name it). It doesn't fail the run; review the transcript.
+
+The tests drive `bin/run-task` with `tests/fixtures/fake-opencode`, `fake-codex` and `fake-claude` (set through `OPENCODE_BIN`, `CODEX_BIN` and `CLAUDE_BIN`), so they never contact a model.
 
 ### Counted runs, regrading and `RESULTS.md`
 
 ```sh
-bin/run-batch TASK [--run-root DIR] [--records-dir DIR]
+bin/run-batch TASK [--backend claude|codex|opencode] [--model MODEL] [--reasoning-effort EFFORT]
+              [--max-budget-usd USD] [--run-root DIR] [--records-dir DIR]
               [--timeout SECONDS] [--max-rounds N] [--check-timeout SECONDS]
 bin/regrade RECORD_DIR [--check-timeout SECONDS]
 bin/results TASK [--records-dir DIR] [--output FILE]
+bin/results TASK --overview RECORDS_DIR... [--output FILE]
 ```
 
-`bin/run-batch` calls `bin/run-task` for the counted runs 1 to 5 of both setups, with the same flags for every run. The setup that goes first alternates (run 1: with, without; run 2: without, with; ...) so a slow or fast stretch of the night doesn't favour one setup. It skips a run whose record already has a `result.json`, so running it again after an interruption resumes with the next unfinished run. A run whose `run-task` fails (no record) doesn't stop the batch; it is listed at the end, the exit code is 1, and the next batch call retries it. It never runs the practice run. Overnight, after the practice run:
+`bin/run-batch` calls `bin/run-task` for the counted runs 1 to 5 of both setups, with the same flags for every run (backend, model, effort and budget included). The setup that goes first alternates (run 1: with, without; run 2: without, with; ...) so a slow or fast stretch of the night doesn't favour one setup. It skips a run whose record already has a `result.json`, so running it again after an interruption resumes with the next unfinished run. A run whose `run-task` fails (no record) doesn't stop the batch; it is listed at the end, the exit code is 1, and the next batch call retries it. It never runs the practice run. Overnight, after the practice runs, one batch per backend:
 
 ```sh
 export PATH="$PWD/bin:$PATH"
-bin/preflight && caffeinate -i bin/run-batch game-2048 2>&1 | tee -a /tmp/2048-batch.log
+bin/preflight --backend claude &&
+  caffeinate -i bin/run-batch game-2048 --backend claude --records-dir runs/claude 2>&1 | tee -a /tmp/2048-batch-claude.log
+bin/preflight --backend codex &&
+  caffeinate -i bin/run-batch game-2048 --backend codex --records-dir runs/codex 2>&1 | tee -a /tmp/2048-batch-codex.log
 ```
 
-`bin/regrade runs/game-2048/with-skills/3` grades that run's saved `src/` again against the task's hidden tests in a temporary folder (the record is never changed), prints each file's status and the hidden-test score, and exits 0 if they match `result.json`, 1 if not. It checks the code only; a run that hit a limit failed even if its code passes.
+`bin/regrade runs/claude/game-2048/with-skills/3` grades that run's saved `src/` again against the task's hidden tests in a temporary folder (the record is never changed), prints each file's status and the hidden-test score, and exits 0 if they match `result.json`, 1 if not. It works on every backend's records. It checks the code only; a run that hit a limit failed even if its code passes.
 
-`bin/results game-2048` writes `RESULTS.md` from `<records dir>/game-2048/*/*/result.json` (default `runs/`; record paths in `RESULTS.md` are relative to its folder when the records are inside it, else absolute): a row per counted run, a summary per setup (pass rate, medians of hidden tests, rounds and duration), the practice run listed apart, the method (model name from the records, lisp-skills commit from the submodule, limits from the records), threats to validity, how to regrade, and, for a task whose spec defines `play`, how to play the best passing run (fewest rounds, then shortest duration) from a temporary copy of its `src/`, or that no run passed. Rerun it after the batch; it overwrites `RESULTS.md`.
+`bin/results game-2048 --records-dir runs/claude --output RESULTS-claude.md` writes a report from `<records dir>/game-2048/*/*/result.json` (default records dir `runs/`, default output `RESULTS.md`; record paths in the report are relative to its folder when the records are inside it, else absolute): a row per counted run, a summary per setup (pass rate, medians of hidden tests, rounds and duration, plus median tokens and cost when the records have them), the practice run listed apart, suspected leaks, the method (agent, model and effort from the records, how the rules were delivered, lisp-skills commit from the submodule, limits from the records), threats to validity, how to regrade, and, for a task whose spec defines `play`, how to play the best passing run (fewest rounds, then shortest duration) from a temporary copy of its `src/`, or that no run passed. Rerun it after the batch; it overwrites its output.
+
+`bin/results game-2048 --overview runs/claude runs/codex` writes `RESULTS-overview.md` (or `--output`): one row per backend and setup with model, effort, counted runs, pass rate, the medians of hidden tests, rounds, duration, total tokens and cost (`n/a` where the records hold none, as for Codex cost) and the records directory the row came from; then the practice runs apart, suspected leaks, the method and threats to validity. It exits 2 if a records directory has no records for the task or has records of another task under it.
+
+After the batches:
+
+```sh
+bin/results game-2048 --records-dir runs/claude --output RESULTS-claude.md
+bin/results game-2048 --records-dir runs/codex --output RESULTS-codex.md
+bin/results game-2048 --overview runs/claude runs/codex
+```
 
 ## Running at work (openSUSE + LiteLLM)
 

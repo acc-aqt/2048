@@ -124,10 +124,80 @@ class BatchTest(unittest.TestCase):
         self.assertIn("unknown task", completed.stderr)
         self.assertEqual(self.runs_started(), [])
 
+    def test_refuses_up_front_when_the_records_dir_holds_another_backends_records(self):
+        record = self.records / TASK / "with-skills" / "1"
+        record.mkdir(parents=True)
+        (record / "result.json").write_text(json.dumps({"backend": "codex"}) + "\n")
+
+        completed = self.run_batch()
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("codex", completed.stderr)
+        self.assertIn("--records-dir", completed.stderr)
+        self.assertEqual(completed.stderr.count("run-batch:"), 1)
+        self.assertNotIn("run-task", completed.stdout + completed.stderr)
+        self.assertEqual(self.runs_started(), [])
+
+    def test_refuses_the_whole_batch_once_when_the_budget_is_given_to_another_backend(self):
+        completed = self.run_batch("--max-budget-usd", "2")
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stderr.count("--max-budget-usd is for --backend claude"), 1)
+        self.assertNotIn("run-task", completed.stdout + completed.stderr)
+        self.assertEqual(self.runs_started(), [])
+
+    def test_refuses_the_whole_batch_once_when_the_budget_is_not_a_positive_number(self):
+        claude_seen = Path(self.tmp.name) / "fake-claude-seen.jsonl"
+        self.env.update(CLAUDE_BIN=str(FIXTURES / "fake-claude"), FAKE_CLAUDE_RECORD=str(claude_seen))
+        for budget in ("abc", "0", "-1"):
+            with self.subTest(budget=budget):
+                completed = self.run_batch("--backend", "claude", f"--max-budget-usd={budget}")
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(completed.stderr.count("positive number"), 1, completed.stderr)
+                self.assertNotIn("run-task", completed.stdout + completed.stderr)
+                self.assertFalse(claude_seen.exists())
+
     def test_never_runs_the_practice_run(self):
         self.run_batch()
 
         self.assertNotIn(0, [number for _, number in self.runs_started()])
+
+    def test_codex_backend_model_and_effort_reach_every_run(self):
+        codex_seen = Path(self.tmp.name) / "fake-codex-seen.jsonl"
+        self.env.update(CODEX_BIN=str(FIXTURES / "fake-codex"), FAKE_CODEX_RECORD=str(codex_seen),
+                        FAKE_CODEX_SOLUTION=str(WRONG), DOCKER_HOST="unix:///nonexistent/docker.sock")
+
+        completed = self.run_batch("--backend", "codex", "--model", "gpt-other", "--reasoning-effort", "medium")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(len(codex_seen.read_text().splitlines()), 10)
+        self.assertEqual(self.runs_started(), [])
+        results = [json.loads(p.read_text()) for p in self.records.glob(f"{TASK}/*/*/result.json")]
+        self.assertEqual(len(results), 10)
+        for result in results:
+            self.assertEqual((result["backend"], result["model"], result["reasoning_effort"]),
+                             ("codex", "gpt-other", "medium"))
+
+    def test_claude_backend_model_effort_and_budget_reach_every_run(self):
+        claude_seen = Path(self.tmp.name) / "fake-claude-seen.jsonl"
+        self.env = {k: v for k, v in self.env.items() if not k.startswith("CLAUDE")}
+        self.env.update(CLAUDE_BIN=str(FIXTURES / "fake-claude"), FAKE_CLAUDE_RECORD=str(claude_seen),
+                        FAKE_CLAUDE_SOLUTION=str(WRONG), DOCKER_HOST="unix:///nonexistent/docker.sock")
+
+        completed = self.run_batch("--backend", "claude", "--model", "sonnet", "--reasoning-effort", "medium",
+                                   "--max-budget-usd", "2.5")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        seen = [json.loads(line) for line in claude_seen.read_text().splitlines()]
+        self.assertEqual(len(seen), 10)
+        for argv in (s["argv"] for s in seen):
+            self.assertEqual(argv[argv.index("--max-budget-usd") + 1], "2.5")
+        results = [json.loads(p.read_text()) for p in self.records.glob(f"{TASK}/*/*/result.json")]
+        self.assertEqual(len(results), 10)
+        for result in results:
+            self.assertEqual((result["backend"], result["model"], result["reasoning_effort"], result["budget_usd"]),
+                             ("claude", "sonnet", "medium", 2.5))
 
 
 if __name__ == "__main__":

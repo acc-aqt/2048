@@ -8,11 +8,12 @@ interrupted batch resumes where it stopped. A failed run doesn't stop the batch.
 import argparse
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from harness.grade import DEFAULT_CHECK_TIMEOUT
-from harness.runner import (DEFAULT_MAX_ROUNDS, DEFAULT_RECORDS, DEFAULT_RUN_ROOT, DEFAULT_TIMEOUT,
-                            REPO, TASKS, has_record)
+from harness.runner import (BACKENDS, DEFAULT_MAX_ROUNDS, DEFAULT_RECORDS, DEFAULT_RUN_ROOT, DEFAULT_TIMEOUT,
+                            REPO, TASKS, has_record, other_backend_problem)
 from harness.setups import SETUPS
 
 RUN_TASK = REPO / "bin" / "run-task"
@@ -28,6 +29,17 @@ def schedule(setups=tuple(SETUPS), runs=COUNTED_RUNS):
     return order
 
 
+def positive_budget(text):
+    """TEXT, unchanged for run-task, if it is a positive number of dollars."""
+    try:
+        valid = float(text) > 0
+    except ValueError:
+        valid = False
+    if not valid:
+        raise argparse.ArgumentTypeError(f"must be a positive number, not {text!r}")
+    return text
+
+
 def parse_args(argv):
     parser = argparse.ArgumentParser(prog="run-batch", description=__doc__)
     parser.add_argument("task", help="folder name under tasks/")
@@ -36,18 +48,32 @@ def parse_args(argv):
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="passed to every run-task call")
     parser.add_argument("--check-timeout", type=int, default=DEFAULT_CHECK_TIMEOUT, help="passed to every run-task call")
     parser.add_argument("--max-rounds", type=int, default=DEFAULT_MAX_ROUNDS, help="passed to every run-task call")
+    parser.add_argument("--backend", choices=sorted(BACKENDS), default="opencode", help="passed to every run-task call")
+    parser.add_argument("--model", help="passed to every run-task call")
+    parser.add_argument("--reasoning-effort", help="passed to every run-task call")
+    parser.add_argument("--max-budget-usd", type=positive_budget, help="claude only: passed to every run-task call")
     args = parser.parse_args(argv)
     if not (TASKS / args.task / "spec.md").is_file():
         parser.error(f"unknown task '{args.task}': no tasks/{args.task}/spec.md")
+    if args.backend != "claude" and args.max_budget_usd is not None:
+        parser.error("--max-budget-usd is for --backend claude")
     return args
 
 
 def main(argv):
     args = parse_args(argv)
     records = Path(args.records_dir).resolve()
+    problem = other_backend_problem(records, args.task, args.backend)
+    if problem:
+        print(f"run-batch: {problem}", file=sys.stderr)
+        return 1
     flags = ["--run-root", args.run_root, "--records-dir", str(records),
              "--timeout", str(args.timeout), "--check-timeout", str(args.check_timeout),
-             "--max-rounds", str(args.max_rounds)]
+             "--max-rounds", str(args.max_rounds), "--backend", args.backend]
+    for flag, value in (("--model", args.model), ("--reasoning-effort", args.reasoning_effort),
+                        ("--max-budget-usd", args.max_budget_usd)):
+        if value:
+            flags += [flag, value]
     failed = []
     for setup, number in schedule():
         label = f"{args.task} {setup} #{number}"

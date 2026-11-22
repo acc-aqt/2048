@@ -1,0 +1,50 @@
+(defpackage :game-2048-tests
+  (:use :cl))
+(in-package :game-2048-tests)
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (require :tester))
+
+(defvar game-2048-tests-suite nil)
+
+(defun run-tests ()
+  (multiple-value-bind (row score) (game-2048:slide-row '(2 2 2 2))
+    (assert (equal row '(4 4 0 0)))
+    (assert (= score 8)))
+  (multiple-value-bind (row score) (game-2048:slide-row '(2 2 4 0))
+    (assert (equal row '(4 4 0 0)))
+    (assert (= score 4)))
+  (let ((board (make-array '(4 4) :initial-element 0)))
+    (setf (aref board 0 0) 2 (aref board 0 1) 2)
+    (multiple-value-bind (result score changed) (game-2048:move board :left)
+      (assert (= (aref result 0 0) 4))
+      (assert (= score 4))
+      (assert changed))
+    (assert (= (aref board 0 0) 2)))
+  (let ((board (make-array '(4 4) :initial-element 0)))
+    (setf (aref board 3 3) 2048)
+    (assert (game-2048:won-p board)))
+  (let ((board (make-array '(4 4))))
+    (dotimes (row 4)
+      (dotimes (column 4)
+        (setf (aref board row column) (expt 2 (+ 1 (* 2 row) (* 2 column))))))
+    (assert (game-2048:game-over-p board)))
+  (let* ((board (make-array '(4 4) :initial-element 0))
+         (state-a (make-random-state t))
+         (state-b (make-random-state state-a))
+         (one (game-2048:spawn-tile board state-a))
+         (two (game-2048:spawn-tile board state-b)))
+    (assert (equalp one two))
+    (assert (= (loop for row below 4 sum
+                     (loop for column below 4
+                           count (not (zerop (aref one row column)))))
+               1)))
+  (let ((input (make-string-input-stream (format nil "q~%")))
+        (output (make-string-output-stream)))
+    (game-2048:play :input input :output output
+                    :random-state (make-random-state t))
+    (assert (search "Score: 0" (get-output-stream-string output))))
+  t)
+
+(util.test:test game-2048-tests-suite
+  (assert (run-tests)))

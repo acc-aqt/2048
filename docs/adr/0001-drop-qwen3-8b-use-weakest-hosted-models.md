@@ -17,7 +17,7 @@ Before any Lisp run, a hand-driven smoke test asked that model to build a simple
 The default Mac benchmark runs hosted agents on their weakest available models at low reasoning effort:
 
 - Codex CLI: model `gpt-6-luna`, `low` reasoning effort, one agent (no multi-agent).
-- Claude Code: model `haiku`, `low` effort, with no user CLAUDE.md, plugins, memory, subagents or web tools (planned, not built yet).
+- Claude Code: model `haiku`, `low` effort, with no user CLAUDE.md, plugins, memory, subagents or web tools (built: [#10](https://github.com/acc-aqt/2048/issues/10), part of [#8](https://github.com/acc-aqt/2048/issues/8)).
 
 In `with-skills`, the pinned rules reach each agent through its own project instructions file: a generated `AGENTS.md` for Codex and a generated `CLAUDE.md` for Claude Code.
 

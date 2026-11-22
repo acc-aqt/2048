@@ -1,0 +1,52 @@
+$ lisp-check --test game-2048-tests.lisp
+game-2048-tests.lisp:35: compile: style-warning: Free reference to undeclared variable SLIDE-ROW.ALL-PAIRS assumed special.
+game-2048-tests.lisp:39: compile: style-warning: Free reference to undeclared variable SLIDE-ROW.THREE-OF-A-KIND assumed special.
+game-2048-tests.lisp:43: compile: style-warning: Free reference to undeclared variable SLIDE-ROW.GAPS assumed special.
+game-2048-tests.lisp:47: compile: style-warning: Free reference to undeclared variable SLIDE-ROW.NO-MERGE assumed special.
+game-2048-tests.lisp:51: compile: style-warning: Free reference to undeclared variable SLIDE-ROW.NO-DOUBLE-MERGE assumed special.
+game-2048-tests.lisp:55: compile: style-warning: Free reference to undeclared variable SLIDE-ROW.EMPTY assumed special.
+game-2048-tests.lisp:59: compile: style-warning: Free reference to undeclared variable SLIDE-ROW.DOES-NOT-MODIFY-INPUT assumed special.
+game-2048-tests.lisp:67: compile: style-warning: Free reference to undeclared variable MOVE.LEFT-MERGES assumed special.
+game-2048-tests.lisp:72: compile: style-warning: Free reference to undeclared variable MOVE.RIGHT-MERGES assumed special.
+game-2048-tests.lisp:77: compile: style-warning: Free reference to undeclared variable MOVE.UP-MERGES-COLUMNS assumed special.
+game-2048-tests.lisp:82: compile: style-warning: Free reference to undeclared variable MOVE.DOWN-MERGES-COLUMNS assumed special.
+game-2048-tests.lisp:87: compile: style-warning: Free reference to undeclared variable MOVE.NO-CHANGE-REPORTS-NIL assumed special.
+game-2048-tests.lisp:92: compile: style-warning: Free reference to undeclared variable MOVE.DOES-NOT-MODIFY-BOARD assumed special.
+game-2048-tests.lisp:100: compile: style-warning: Free reference to undeclared variable SPAWN-TILE.ADDS-ONE-TILE assumed special.
+game-2048-tests.lisp:111: compile: style-warning: Free reference to undeclared variable SPAWN-TILE.KEEPS-EXISTING-TILES assumed special.
+game-2048-tests.lisp:117: compile: style-warning: Free reference to undeclared variable SPAWN-TILE.DOES-NOT-MODIFY-BOARD assumed special.
+game-2048-tests.lisp:123: compile: style-warning: Free reference to undeclared variable SPAWN-TILE.DETERMINISTIC-WITH-SAME-STATE assumed special.
+game-2048-tests.lisp:131: compile: style-warning: Free reference to undeclared variable SPAWN-TILE.FILLS-ONLY-EMPTY-CELL assumed special.
+game-2048-tests.lisp:143: compile: style-warning: Free reference to undeclared variable WON-P.TRUE-WITH-2048 assumed special.
+game-2048-tests.lisp:147: compile: style-warning: Free reference to undeclared variable WON-P.FALSE-WITHOUT-2048 assumed special.
+game-2048-tests.lisp:151: compile: style-warning: Free reference to undeclared variable GAME-OVER-P.FULL-NO-MERGES assumed special.
+game-2048-tests.lisp:155: compile: style-warning: Free reference to undeclared variable GAME-OVER-P.EMPTY-CELL-IS-NOT-OVER assumed special.
+game-2048-tests.lisp:159: compile: style-warning: Free reference to undeclared variable GAME-OVER-P.MERGE-AVAILABLE assumed special.
+game-2048-tests.lisp:173: compile: style-warning: Free reference to undeclared variable PLAY.QUIT-PRINTS-SCORE assumed special.
+game-2048-tests.lisp:178: compile: style-warning: Free reference to undeclared variable PLAY.END-OF-INPUT-RETURNS assumed special.
+game-2048-tests.lisp:182: compile: style-warning: Free reference to undeclared variable PLAY.INVALID-KEY-REPORTED assumed special.
+game-2048-tests.lisp:186: compile: style-warning: Free reference to undeclared variable PLAY.RETURNS-SCORE-AFTER-QUIT assumed special.
+game-2048-tests.lisp:193: compile: style-warning: Free reference to undeclared variable PLAY.STARTS-WITH-TWO-TILES assumed special.
+game-2048-tests.lisp:?: compile: style-warning: While compiling these undefined functions were referenced: UTIL.TEST::DEFTEST from character position 955 in game-2048-tests.lisp,   character position 1049 in game-2048-tests.lisp, character position   1149 in game-2048-tests.lisp, character position 1238 in   game-2048-tests.lisp
+FAIL
+
+$ lisp-check game-2048.lisp
+OK
+
+$ lisp-check package.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-move-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-play-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-slide-row-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-spawn-tile-tests.lisp
+OK
+
+$ lisp-check --test hidden-tests/hidden-won-game-over-tests.lisp
+OK
